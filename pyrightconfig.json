@@ -1,0 +1,6 @@
+{
+  "include": ["."],
+  "exclude": [".venv", "**/__pycache__", "**/*.egg-info"],
+  "typeCheckingMode": "basic",
+  "pythonVersion": "3.12"
+}
