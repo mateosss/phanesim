@@ -22,6 +22,7 @@ joint detection for hand tracking.
 
 ## Technical details
 
+- Use jsom schemas for validating the project description json files
 - Uses uv for package management
 - Uses ruff for linting
 - Uses ruff for formatting
@@ -39,6 +40,7 @@ joint detection for hand tracking.
 - We prefer int64 timestamps in nanoseconds
 - We use the convention T_a_b for the transform from frame b to frame a, i.e. p_a = T_a_b * p_b.
 - We can use X_a_b with X = T for 4x4 SE(3), q for quaternion, t for translation, R for rotation matrix, etc. The same convention applies for the subscripts.
+- We use the "Assisted-by: AGENT_NAME:MODEL_VERSION [TOOL1] [TOOL2]" tag in the commit messages to indicate that the commit was assisted by an AI agent, and which tools were used.
 
 ## Data specification
 
@@ -142,7 +144,36 @@ class CameraHandRig:
 
 class Sequence:
     name: str # human readable name
+    output_path: Path # path to the folder where the dataset will be generated, if in a project, relative to the project output path
     camhand_rig: CameraHandRig
     cam_motions: List[CameraMotion]
     hand_motions: List[HandMotion]
+
+class Project:
+    name: str # human readable name
+    output_path: Path # path to the folder where the dataset will be generated
+    sequences: List[Sequence]
+```
+
+## CLI
+
+The CLI will have the following commands:
+
+```bash
+# Validate commands check the json schemas of each json file, and return ok if they are valid
+./phanesim validate camera camera.json
+./phanesim validate camera_motion cam_motion.csv
+./phanesim validate hand_motion hand_motion.csv
+./phanesim validate hand hand.json
+./phanesim validate camhand_rig rig.json
+./phanesim validate sequence sequence.json
+./phanesim validate project project.json
+
+# Render can render either a sequence or a project (set of sequences)
+
+./phanesim generate sequence sequence.json --output output_sequence_folder
+# generates the sequence: renders images and csv with groundtruth 2d joint positions
+
+./phanesim generate project project.json --output output_project_folder
+# generates all the sequences in the project, each in a separate folder under output_project_folder
 ```
