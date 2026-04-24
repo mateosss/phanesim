@@ -33,6 +33,16 @@ joint detection for hand tracking.
 - Uses github actions for CI: ruff, pyright, pylint, pytest, SPDX check
 - We use numpy for all the math types, only convert to blender types when needed.
 
+## Development commands
+
+```bash
+uv sync --all-groups # Install with uv (including development tools)
+uv run pyright # Run Pyright
+uv run ruff check . # Run Ruff lint checks
+uv run ruff format --check . # Run Ruff formatter check
+uv run python scripts/check_spdx_headers.py # Run SPDX header check
+```
+
 ## Other details
 
 - We prefer csv files whenever needed for tabular data. Use pandas with pyarrow to read them.
@@ -41,6 +51,7 @@ joint detection for hand tracking.
 - We use the convention T_a_b for the transform from frame b to frame a, i.e. p_a = T_a_b * p_b.
 - We can use X_a_b with X = T for 4x4 SE(3), q for quaternion, t for translation, R for rotation matrix, etc. The same convention applies for the subscripts.
 - We use the "Assisted-by: AGENT_NAME:MODEL_VERSION [TOOL1] [TOOL2]" tag in the commit messages to indicate that the commit was assisted by an AI agent, and which tools were used.
+- We prefer commits with small diffs and the message should be descriptive, e.g., "Add preliminary camera motion functionality"
 
 ## Data specification
 
