@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "phanesim"
+version = "0.1.0"
+description = "Synthetic dataset generator for computer vision"
+readme = "README.md"
+requires-python = ">=3.12"
+
+[project.scripts]
+phanesim = "phanesim:main"
+
+[tool.setuptools]
+py-modules = ["phanesim"]
