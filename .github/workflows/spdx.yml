@@ -1,0 +1,19 @@
+# Copyright 2026, Mateo de Mayo.
+# SPDX-License-Identifier: BSD-3-Clause
+
+name: SPDX
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  check-spdx-headers:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check SPDX headers
+        run: python scripts/check_spdx_headers.py
