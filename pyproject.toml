@@ -10,7 +10,7 @@ name = "phanesim"
 version = "0.1.0"
 description = "Synthetic dataset generator for computer vision"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.13"
 dependencies = [
     "click>=8.3.3",
 ]
@@ -23,7 +23,7 @@ py-modules = ["phanesim"]
 
 [tool.ruff]
 line-length = 120
-target-version = "py312"
+target-version = "py313"
 
 [tool.ruff.format]
 quote-style = "double"
