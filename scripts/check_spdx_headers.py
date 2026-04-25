@@ -10,6 +10,19 @@ import sys
 from pathlib import Path
 
 
+SIDE_CAR_SUFFIX = ".spdx"
+
+
+def has_spdx_header(file_path: Path) -> bool:
+    try:
+        head = "\n".join(file_path.read_text(encoding="utf-8").splitlines()[:10])
+    except UnicodeDecodeError:
+        sidecar_path = file_path.with_name(f"{file_path.name}{SIDE_CAR_SUFFIX}")
+        return sidecar_path.is_file() and has_spdx_header(sidecar_path)
+
+    return "SPDX-License-Identifier:" in head
+
+
 def main() -> int:
     repository_root = Path(__file__).resolve().parents[1]
     tracked_files = subprocess.check_output(
@@ -23,8 +36,7 @@ def main() -> int:
         if not file_path.is_file():
             continue
 
-        head = "\n".join(file_path.read_text(encoding="utf-8").splitlines()[:10])
-        if "SPDX-License-Identifier:" not in head:
+        if not has_spdx_header(file_path):
             missing_headers.append(relative_path)
 
     if missing_headers:
