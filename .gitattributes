@@ -1,4 +1,4 @@
 # Copyright 2026, Mateo de Mayo.
 # SPDX-License-Identifier: BSD-3-Clause
-
 *.png filter=lfs diff=lfs merge=lfs -text
+*.blend filter=lfs diff=lfs merge=lfs -text

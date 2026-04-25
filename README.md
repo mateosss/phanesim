@@ -43,6 +43,14 @@ uv run ruff format --check . # Run Ruff formatter check
 uv run python scripts/check_spdx_headers.py # Run SPDX header check
 ```
 
+## Blender workflow
+
+For now we use this through a bootstrap.py script inside the blend file that is
+autorun at the beginning and reloads all scripts in the blend file and setups
+the Phanesim panel UI in `View3D > Sidebar > Phanesim`. A script reload can be
+also triggered by clicking the `Reload Scripts` button, useful for iterating
+without closing the blend file.
+
 ## Other details
 
 - We prefer csv files whenever needed for tabular data. Use pandas with pyarrow to read them.
