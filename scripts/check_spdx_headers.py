@@ -11,6 +11,7 @@ from pathlib import Path
 
 
 SIDE_CAR_SUFFIX = ".spdx"
+IGNORE_FILES = {"LICENSE"}
 
 
 def has_spdx_header(file_path: Path) -> bool:
@@ -29,6 +30,7 @@ def main() -> int:
         ["git", "-C", str(repository_root), "ls-files"],
         text=True,
     ).splitlines()
+    tracked_files = [f for f in tracked_files if Path(f).name not in IGNORE_FILES]
 
     missing_headers = []
     for relative_path in tracked_files:
