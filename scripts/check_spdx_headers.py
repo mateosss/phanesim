@@ -15,13 +15,21 @@ IGNORE_FILES = {"LICENSE"}
 
 
 def has_spdx_header(file_path: Path) -> bool:
-    try:
+    try:  # Text file with header
         head = "\n".join(file_path.read_text(encoding="utf-8").splitlines()[:10])
-    except UnicodeDecodeError:
-        sidecar_path = file_path.with_name(f"{file_path.name}{SIDE_CAR_SUFFIX}")
-        return sidecar_path.is_file() and has_spdx_header(sidecar_path)
+        if "SPDX-License-Identifier:" in head:
+            return True
+    except UnicodeDecodeError:  # Binary file, look for sidecar
+        pass
 
-    return "SPDX-License-Identifier:" in head
+    # Check if current file is already a sidecar and doesn't have a header
+    if file_path.name.endswith(SIDE_CAR_SUFFIX):
+        return False
+
+    # A binary file with a sidecar file containing the header
+    sidecar_path = file_path.with_name(f"{file_path.name}{SIDE_CAR_SUFFIX}")
+    has_sidecar = sidecar_path.is_file() and has_spdx_header(sidecar_path)
+    return has_sidecar
 
 
 def main() -> int:
