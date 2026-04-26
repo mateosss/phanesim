@@ -7,7 +7,7 @@ import importlib
 import sys
 from pathlib import Path
 
-import bpy
+import bpy  # pyright: ignore[reportMissingImports]
 
 
 def main():

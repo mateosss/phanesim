@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import bpy
+import bpy  # pyright: ignore[reportMissingImports]
 
 import bootstrap
 

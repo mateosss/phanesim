@@ -19,6 +19,8 @@ jobs:
             command: ruff check .
           - name: Ruff format
             command: ruff format --check .
+          - name: Pyright
+            command: pyright
 
     steps:
       - name: Checkout repository
