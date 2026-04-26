@@ -9,7 +9,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-
 SIDE_CAR_SUFFIX = ".spdx"
 IGNORE_FILES = {"LICENSE"}
 

@@ -3,10 +3,10 @@
 
 """Script used inside blend file"""
 
-import sys
 import importlib
+import sys
 from pathlib import Path
-import bootstrap
+
 import bpy
 
 

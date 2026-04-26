@@ -6,8 +6,8 @@ from __future__ import annotations
 from pathlib import Path
 
 import bpy
-import bootstrap
 
+import bootstrap
 
 bl_info = {
     "name": "Phanesim",
