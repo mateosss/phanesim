@@ -1,4 +1,4 @@
-# Copyright 2026, Yutong Wan.
+# Copyright 2026, Mateo de Mayo.
 # SPDX-License-Identifier: BSD-3-Clause
 
 from __future__ import annotations
@@ -10,7 +10,7 @@ from pathlib import Path
 import click
 import jsonschema
 
-from . import validate as val
+import phanesim.validate as val
 
 # Parent directory of the phanesim package — added to sys.path inside Blender
 # so that `import phanesim` works in the headless rendering subprocess.
