@@ -46,3 +46,9 @@ dev = [
     "ruff>=0.15.11",
     "pytest>=8.0",
 ]
+
+[tool.pyright]
+include = ["src"]
+executionEnvironments = [
+  { root = "src" }
+]
