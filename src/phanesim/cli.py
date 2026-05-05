@@ -10,7 +10,7 @@ from pathlib import Path
 import click
 import jsonschema
 
-import phanesim.validate as val
+from . import validate as val
 
 # Parent directory of the phanesim package — added to sys.path inside Blender
 # so that `import phanesim` works in the headless rendering subprocess.
