@@ -13,13 +13,17 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "click>=8.3.3",
+    "numpy>=1.26",
+    "pandas>=2.2",
+    "pyarrow>=15.0",
+    "jsonschema>=4.21",
 ]
 
 [project.scripts]
-phanesim = "phanesim:main"
+phanesim = "phanesim.cli:main"
 
-[tool.setuptools]
-py-modules = ["phanesim"]
+[tool.setuptools.packages.find]
+where = ["src"]
 
 [tool.ruff]
 line-length = 120
@@ -40,4 +44,5 @@ known-first-party = ["phanesim"]
 dev = [
     "pyright>=1.1.409",
     "ruff>=0.15.11",
+    "pytest>=8.0",
 ]
