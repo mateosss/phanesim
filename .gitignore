@@ -5,12 +5,4 @@ __pycache__/
 *.egg-info/
 *.blend1
 
-.venv/
-venv/
-env/
-
 data/
-examples/minimal/output/
-
-.pytest_cache/
-.ruff_cache/

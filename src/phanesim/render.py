@@ -323,43 +323,6 @@ def _configure_render(scene: bpy.types.Scene, camera: Camera, cam_obj: bpy.types
     if camera.shutter.value == "rolling":
         scene.render.use_motion_blur = True
 
-    if camera.vignette is not None:
-        _setup_vignette_compositor(scene, camera.vignette.path)
-
-
-def _setup_vignette_compositor(scene: bpy.types.Scene, vignette_path: Path) -> None:
-    """Wire up a compositor that multiplies each rendered frame by a vignette mask."""
-    scene.use_nodes = True
-    tree = scene.node_tree
-    nodes = tree.nodes
-    links = tree.links
-
-    # Find or create the mandatory Render Layers and Composite output nodes.
-    rl_node: bpy.types.Node | None = next((n for n in nodes if n.type == "R_LAYERS"), None)
-    out_node: bpy.types.Node | None = next((n for n in nodes if n.type == "COMPOSITE"), None)
-    if rl_node is None:
-        rl_node = nodes.new("CompositorNodeRLayers")
-        rl_node.location = (-400, 0)
-    if out_node is None:
-        out_node = nodes.new("CompositorNodeComposite")
-        out_node.location = (400, 0)
-
-    # Vignette image node.
-    vig_img = bpy.data.images.load(str(vignette_path), check_existing=True)
-    vig_node = nodes.new("CompositorNodeImage")
-    vig_node.image = vig_img
-    vig_node.location = (-200, -250)
-
-    # Multiply: rendered image × vignette mask.
-    mix = nodes.new("CompositorNodeMixRGB")
-    mix.blend_type = "MULTIPLY"
-    mix.inputs[0].default_value = 1.0
-    mix.location = (100, 0)
-
-    links.new(rl_node.outputs["Image"], mix.inputs[1])
-    links.new(vig_node.outputs["Image"], mix.inputs[2])
-    links.new(mix.outputs["Image"], out_node.inputs["Image"])
-
 
 # ---------------------------------------------------------------------------
 # Frame-level rendering
