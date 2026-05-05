@@ -2,139 +2,66 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Camera",
   "type": "object",
-  "required": [
-    "T_b_c",
-    "intrinsics",
-    "resolution",
-    "frequency",
-    "pixel_format",
-    "shutter",
-    "exposure",
-    "gain"
-  ],
+  "required": ["T_b_c", "intrinsics", "resolution", "frequency", "pixel_format", "shutter", "exposure", "gain"],
   "additionalProperties": false,
   "properties": {
-    "name": {
-      "type": "string"
-    },
-    "T_b_c": {
-      "$ref": "#/$defs/transform"
-    },
+    "name": { "type": "string" },
+    "T_b_c": { "$ref": "#/$defs/transform" },
     "intrinsics": {
       "type": "object",
-      "required": [
-        "name",
-        "parameters"
-      ],
+      "required": ["name", "parameters"],
       "additionalProperties": false,
       "properties": {
-        "name": {
-          "type": "string"
-        },
+        "name": { "type": "string" },
         "parameters": {
           "type": "object",
-          "additionalProperties": {
-            "type": "number"
-          }
+          "additionalProperties": { "type": "number" }
         }
       }
     },
     "resolution": {
       "type": "array",
-      "items": {
-        "type": "integer",
-        "minimum": 1
-      },
+      "items": { "type": "integer", "minimum": 1 },
       "minItems": 2,
       "maxItems": 2
     },
-    "frequency": {
-      "type": "number",
-      "exclusiveMinimum": 0
-    },
-    "pixel_format": {
-      "type": "string"
-    },
-    "shutter": {
-      "type": "string",
-      "enum": [
-        "global",
-        "rolling"
-      ]
-    },
-    "exposure": {
-      "type": "integer"
-    },
-    "gain": {
-      "type": "integer"
-    },
+    "frequency": { "type": "number", "exclusiveMinimum": 0 },
+    "pixel_format": { "type": "string" },
+    "shutter": { "type": "string", "enum": ["global", "rolling"] },
+    "exposure": { "type": "integer" },
+    "gain": { "type": "integer" },
     "vignette": {
       "oneOf": [
-        {
-          "type": "null"
-        },
+        { "type": "null" },
         {
           "type": "object",
-          "required": [
-            "path"
-          ],
+          "required": ["path"],
           "additionalProperties": false,
           "properties": {
-            "path": {
-              "type": "string"
-            }
+            "path": { "type": "string" }
           }
         }
       ]
     },
-    "lens_flare": {
-      "type": "boolean"
-    },
-    "chromatic_aberration": {
-      "type": "boolean"
-    },
-    "motion_blur": {
-      "type": "boolean"
-    }
+    "lens_flare": { "type": "boolean" },
+    "chromatic_aberration": { "type": "boolean" },
+    "motion_blur": { "type": "boolean" }
   },
   "$defs": {
     "transform": {
       "type": "object",
-      "required": [
-        "pos",
-        "quat"
-      ],
+      "required": ["pos", "quat"],
       "additionalProperties": false,
       "properties": {
         "pos": {
           "type": "array",
-          "items": {
-            "type": "number"
-          },
+          "items": { "type": "number" },
           "minItems": 3,
           "maxItems": 3
         },
         "quat": {
           "type": "array",
-          "description": "Unit quaternion [x, y, z, w] \u2014 scalar w is the fourth (last) component",
-          "prefixItems": [
-            {
-              "type": "number",
-              "title": "x"
-            },
-            {
-              "type": "number",
-              "title": "y"
-            },
-            {
-              "type": "number",
-              "title": "z"
-            },
-            {
-              "type": "number",
-              "title": "w (scalar)"
-            }
-          ],
+          "items": { "type": "number" },
           "minItems": 4,
           "maxItems": 4
         }
