@@ -10,6 +10,7 @@ from typing import overload
 
 import numpy as np
 import numpy.typing as npt
+from scipy.spatial.transform import Rotation
 
 type Scalar = np.float32
 type Timestamp = np.int64
@@ -27,32 +28,7 @@ type Quaternions = npt.NDArray[np.float32]  # shape (N, 4) xyzw
 
 def _rotmat_to_quat(R: Matrix3x3) -> Quaternion:
     """Convert a 3x3 rotation matrix to a unit quaternion (xyzw)."""
-    trace = R[0, 0] + R[1, 1] + R[2, 2]
-    if trace > 0:
-        s = 0.5 / np.sqrt(trace + 1.0)
-        w = 0.25 / s
-        x = (R[2, 1] - R[1, 2]) * s
-        y = (R[0, 2] - R[2, 0]) * s
-        z = (R[1, 0] - R[0, 1]) * s
-    elif R[0, 0] > R[1, 1] and R[0, 0] > R[2, 2]:
-        s = 2.0 * np.sqrt(1.0 + R[0, 0] - R[1, 1] - R[2, 2])
-        w = (R[2, 1] - R[1, 2]) / s
-        x = 0.25 * s
-        y = (R[0, 1] + R[1, 0]) / s
-        z = (R[0, 2] + R[2, 0]) / s
-    elif R[1, 1] > R[2, 2]:
-        s = 2.0 * np.sqrt(1.0 + R[1, 1] - R[0, 0] - R[2, 2])
-        w = (R[0, 2] - R[2, 0]) / s
-        x = (R[0, 1] + R[1, 0]) / s
-        y = 0.25 * s
-        z = (R[1, 2] + R[2, 1]) / s
-    else:
-        s = 2.0 * np.sqrt(1.0 + R[2, 2] - R[0, 0] - R[1, 1])
-        w = (R[1, 0] - R[0, 1]) / s
-        x = (R[0, 2] + R[2, 0]) / s
-        y = (R[1, 2] + R[2, 1]) / s
-        z = 0.25 * s
-    return np.array([x, y, z, w], dtype=np.float32)
+    return Rotation.from_matrix(R).as_quat().astype(np.float32)  # xyzw scalar-last
 
 
 @dataclass(eq=False)
@@ -166,4 +142,3 @@ class Hand:
     scale_thickness: float = 1.0
     texture: Path | None = None
     color_multiply: Color | None = None
-

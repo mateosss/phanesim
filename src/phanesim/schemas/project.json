@@ -2,31 +2,64 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Project",
   "type": "object",
-  "required": ["name", "output_path", "sequences"],
+  "required": [
+    "name",
+    "output_path",
+    "sequences"
+  ],
   "additionalProperties": false,
   "properties": {
-    "name": { "type": "string" },
-    "output_path": { "type": "string" },
+    "name": {
+      "type": "string"
+    },
+    "output_path": {
+      "type": "string"
+    },
     "sequences": {
       "type": "array",
-      "items": { "$ref": "#/$defs/sequence" }
+      "items": {
+        "$ref": "#/$defs/sequence"
+      }
     }
   },
   "$defs": {
     "transform": {
       "type": "object",
-      "required": ["pos", "quat"],
+      "required": [
+        "pos",
+        "quat"
+      ],
       "additionalProperties": false,
       "properties": {
         "pos": {
           "type": "array",
-          "items": { "type": "number" },
+          "items": {
+            "type": "number"
+          },
           "minItems": 3,
           "maxItems": 3
         },
         "quat": {
           "type": "array",
-          "items": { "type": "number" },
+          "description": "Unit quaternion [x, y, z, w] \u2014 scalar w is the fourth (last) component",
+          "prefixItems": [
+            {
+              "type": "number",
+              "title": "x"
+            },
+            {
+              "type": "number",
+              "title": "y"
+            },
+            {
+              "type": "number",
+              "title": "z"
+            },
+            {
+              "type": "number",
+              "title": "w (scalar)"
+            }
+          ],
           "minItems": 4,
           "maxItems": 4
         }
@@ -34,71 +67,149 @@
     },
     "camera": {
       "type": "object",
-      "required": ["T_b_c", "intrinsics", "resolution", "frequency", "pixel_format", "shutter", "exposure", "gain"],
+      "required": [
+        "T_b_c",
+        "intrinsics",
+        "resolution",
+        "frequency",
+        "pixel_format",
+        "shutter",
+        "exposure",
+        "gain"
+      ],
       "additionalProperties": false,
       "properties": {
-        "name": { "type": "string" },
-        "T_b_c": { "$ref": "#/$defs/transform" },
+        "name": {
+          "type": "string"
+        },
+        "T_b_c": {
+          "$ref": "#/$defs/transform"
+        },
         "intrinsics": {
           "type": "object",
-          "required": ["name", "parameters"],
+          "required": [
+            "name",
+            "parameters"
+          ],
           "additionalProperties": false,
           "properties": {
-            "name": { "type": "string" },
+            "name": {
+              "type": "string"
+            },
             "parameters": {
               "type": "object",
-              "additionalProperties": { "type": "number" }
+              "additionalProperties": {
+                "type": "number"
+              }
             }
           }
         },
         "resolution": {
           "type": "array",
-          "items": { "type": "integer", "minimum": 1 },
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          },
           "minItems": 2,
           "maxItems": 2
         },
-        "frequency": { "type": "number", "exclusiveMinimum": 0 },
-        "pixel_format": { "type": "string" },
-        "shutter": { "type": "string", "enum": ["global", "rolling"] },
-        "exposure": { "type": "integer" },
-        "gain": { "type": "integer" },
+        "frequency": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "pixel_format": {
+          "type": "string"
+        },
+        "shutter": {
+          "type": "string",
+          "enum": [
+            "global",
+            "rolling"
+          ]
+        },
+        "exposure": {
+          "type": "integer"
+        },
+        "gain": {
+          "type": "integer"
+        },
         "vignette": {
           "oneOf": [
-            { "type": "null" },
+            {
+              "type": "null"
+            },
             {
               "type": "object",
-              "required": ["path"],
+              "required": [
+                "path"
+              ],
               "additionalProperties": false,
               "properties": {
-                "path": { "type": "string" }
+                "path": {
+                  "type": "string"
+                }
               }
             }
           ]
         },
-        "lens_flare": { "type": "boolean" },
-        "chromatic_aberration": { "type": "boolean" },
-        "motion_blur": { "type": "boolean" }
+        "lens_flare": {
+          "type": "boolean"
+        },
+        "chromatic_aberration": {
+          "type": "boolean"
+        },
+        "motion_blur": {
+          "type": "boolean"
+        }
       }
     },
     "hand": {
       "type": "object",
-      "required": ["model"],
+      "required": [
+        "model"
+      ],
       "additionalProperties": false,
       "properties": {
-        "model": { "type": "string" },
-        "name": { "type": "string" },
-        "scale_length": { "type": "number", "exclusiveMinimum": 0 },
-        "scale_breadth": { "type": "number", "exclusiveMinimum": 0 },
-        "scale_thickness": { "type": "number", "exclusiveMinimum": 0 },
+        "model": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "scale_length": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "scale_breadth": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "scale_thickness": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
         "texture": {
-          "oneOf": [{ "type": "null" }, { "type": "string" }]
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
         },
         "color_multiply": {
           "oneOf": [
-            { "type": "null" },
+            {
+              "type": "null"
+            },
             {
               "type": "array",
-              "items": { "type": "number", "minimum": 0, "maximum": 1 },
+              "items": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
               "minItems": 3,
               "maxItems": 3
             }
@@ -108,41 +219,67 @@
     },
     "camhand_rig": {
       "type": "object",
-      "required": ["cameras", "hands", "T_c_h"],
+      "required": [
+        "cameras",
+        "hands",
+        "T_c_h"
+      ],
       "additionalProperties": false,
       "properties": {
         "cameras": {
           "type": "array",
-          "items": { "$ref": "#/$defs/camera" }
+          "items": {
+            "$ref": "#/$defs/camera"
+          }
         },
         "hands": {
           "type": "array",
-          "items": { "$ref": "#/$defs/hand" }
+          "items": {
+            "$ref": "#/$defs/hand"
+          }
         },
         "T_c_h": {
           "type": "array",
           "items": {
             "type": "array",
-            "items": { "$ref": "#/$defs/transform" }
+            "items": {
+              "$ref": "#/$defs/transform"
+            }
           }
         }
       }
     },
     "sequence": {
       "type": "object",
-      "required": ["name", "output_path", "camhand_rig", "cam_motions", "hand_motions"],
+      "required": [
+        "name",
+        "output_path",
+        "camhand_rig",
+        "cam_motions",
+        "hand_motions"
+      ],
       "additionalProperties": false,
       "properties": {
-        "name": { "type": "string" },
-        "output_path": { "type": "string" },
-        "camhand_rig": { "$ref": "#/$defs/camhand_rig" },
+        "name": {
+          "type": "string"
+        },
+        "output_path": {
+          "type": "string"
+        },
+        "camhand_rig": {
+          "$ref": "#/$defs/camhand_rig"
+        },
         "cam_motions": {
           "type": "array",
-          "items": { "type": "string" }
+          "items": {
+            "type": "string"
+          }
         },
         "hand_motions": {
           "type": "array",
-          "items": { "type": "string" }
+          "items": {
+            "type": "string"
+          }
         }
       }
     }

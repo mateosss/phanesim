@@ -1,4 +1,4 @@
-# Copyright 2026, Mateo de Mayo.
+# Copyright 2026, Yutong Wan.
 # SPDX-License-Identifier: BSD-3-Clause
 
 [build-system]
@@ -17,6 +17,7 @@ dependencies = [
     "pandas>=2.2",
     "pyarrow>=15.0",
     "jsonschema>=4.21",
+    "scipy>=1.17.1",
 ]
 
 [project.scripts]
