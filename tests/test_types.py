@@ -1,4 +1,4 @@
-# Copyright 2026, Mateo de Mayo.
+# Copyright 2026, Yutong Wan.
 # SPDX-License-Identifier: BSD-3-Clause
 
 from __future__ import annotations
@@ -7,57 +7,51 @@ import math
 
 import numpy as np
 import pytest
+from scipy.spatial.transform import Rotation
 
-from phanesim.types import Transform, _rotmat_to_quat
+from phanesim.types import Transform
 
 
 def _identity() -> Transform:
-    return Transform(
-        pos=np.zeros(3, dtype=np.float32),
-        quat=np.array([0, 0, 0, 1], dtype=np.float32),
-    )
+    return Transform.from_components([0, 0, 0], Rotation.identity())
 
 
 def _rot_z(angle_rad: float) -> Transform:
     """Pure rotation around Z axis."""
-    half = angle_rad / 2
-    return Transform(
-        pos=np.zeros(3, dtype=np.float32),
-        quat=np.array([0, 0, math.sin(half), math.cos(half)], dtype=np.float32),
-    )
+    return Transform.from_components([0, 0, 0], Rotation.from_euler("z", angle_rad))
 
 
 # ---------------------------------------------------------------------------
-# rotmat
+# rotation matrix
 # ---------------------------------------------------------------------------
 
 
 def test_identity_rotmat():
     t = _identity()
-    np.testing.assert_allclose(t.rotmat, np.eye(3, dtype=np.float32), atol=1e-6)
+    np.testing.assert_allclose(t.rotation.as_matrix(), np.eye(3), atol=1e-6)
 
 
 def test_rot_z_90_rotmat():
     t = _rot_z(math.pi / 2)
-    expected = np.array([[0, -1, 0], [1, 0, 0], [0, 0, 1]], dtype=np.float32)
-    np.testing.assert_allclose(t.rotmat, expected, atol=1e-6)
+    expected = np.array([[0, -1, 0], [1, 0, 0], [0, 0, 1]], dtype=np.float64)
+    np.testing.assert_allclose(t.rotation.as_matrix(), expected, atol=1e-6)
 
 
 # ---------------------------------------------------------------------------
-# mat (4x4)
+# as_matrix (4x4)
 # ---------------------------------------------------------------------------
 
 
 def test_mat_is_4x4():
-    t = Transform(pos=np.array([1, 2, 3], dtype=np.float32), quat=np.array([0, 0, 0, 1], dtype=np.float32))
-    assert t.mat.shape == (4, 4)
+    t = Transform.from_components([1, 2, 3], Rotation.identity())
+    assert t.as_matrix().shape == (4, 4)
 
 
 def test_mat_translation():
-    t = Transform(pos=np.array([1, 2, 3], dtype=np.float32), quat=np.array([0, 0, 0, 1], dtype=np.float32))
-    np.testing.assert_allclose(t.mat[:3, 3], [1, 2, 3], atol=1e-6)
-    np.testing.assert_allclose(t.mat[:3, :3], np.eye(3), atol=1e-6)
-    assert t.mat[3, 3] == pytest.approx(1.0)
+    t = Transform.from_components([1, 2, 3], Rotation.identity())
+    np.testing.assert_allclose(t.as_matrix()[:3, 3], [1, 2, 3], atol=1e-6)
+    np.testing.assert_allclose(t.as_matrix()[:3, :3], np.eye(3), atol=1e-6)
+    assert t.as_matrix()[3, 3] == pytest.approx(1.0)
 
 
 # ---------------------------------------------------------------------------
@@ -67,94 +61,82 @@ def test_mat_translation():
 
 def test_identity_inv_is_identity():
     t = _identity()
-    inv = t.inv
-    np.testing.assert_allclose(inv.pos, [0, 0, 0], atol=1e-6)
-    np.testing.assert_allclose(np.abs(inv.quat), [0, 0, 0, 1], atol=1e-6)
+    inv = t.inv()
+    np.testing.assert_allclose(inv.translation, [0, 0, 0], atol=1e-6)
+    np.testing.assert_allclose(np.abs(inv.rotation.as_quat()), [0, 0, 0, 1], atol=1e-6)
 
 
 def test_inv_compose_is_identity():
-    t = Transform(
-        pos=np.array([1, 2, 3], dtype=np.float32),
-        quat=np.array([0, 0, math.sin(math.pi / 4), math.cos(math.pi / 4)], dtype=np.float32),
-    )
-    composed = t * t.inv
-    # Applying the composed transform to any point should return that point.
-    p = np.array([5, 6, 7], dtype=np.float32)
-    np.testing.assert_allclose(composed * p, p, atol=1e-5)
+    t = Transform.from_components([1, 2, 3], Rotation.from_euler("z", math.pi / 2))
+    composed = t * t.inv()
+    p = np.array([5, 6, 7], dtype=np.float64)
+    np.testing.assert_allclose(composed.apply(p), p, atol=1e-5)
 
 
 def test_inv_then_forward_is_identity():
-    t = Transform(
-        pos=np.array([3, -1, 2], dtype=np.float32),
-        quat=np.array([0, math.sin(math.pi / 6), 0, math.cos(math.pi / 6)], dtype=np.float32),
-    )
-    p = np.array([1, 0, 0], dtype=np.float32)
-    np.testing.assert_allclose(t * (t.inv * p), p, atol=1e-5)
+    t = Transform.from_components([3, -1, 2], Rotation.from_euler("y", math.pi / 3))
+    p = np.array([1, 0, 0], dtype=np.float64)
+    np.testing.assert_allclose(t.apply(t.inv().apply(p)), p, atol=1e-5)
 
 
 # ---------------------------------------------------------------------------
-# __mul__ with Transform
+# composition (*)
 # ---------------------------------------------------------------------------
 
 
 def test_mul_two_rot_z_90():
-    # Two 90° Z rotations should give a 180° Z rotation.
     t = _rot_z(math.pi / 2)
     composed = t * t
-    p = np.array([1, 0, 0], dtype=np.float32)
-    np.testing.assert_allclose(composed * p, [-1, 0, 0], atol=1e-5)
+    p = np.array([1, 0, 0], dtype=np.float64)
+    np.testing.assert_allclose(composed.apply(p), [-1, 0, 0], atol=1e-5)
 
 
 def test_mul_translation_accumulates():
-    t1 = Transform(pos=np.array([1, 0, 0], dtype=np.float32), quat=np.array([0, 0, 0, 1], dtype=np.float32))
-    t2 = Transform(pos=np.array([0, 2, 0], dtype=np.float32), quat=np.array([0, 0, 0, 1], dtype=np.float32))
+    t1 = Transform.from_components([1, 0, 0], Rotation.identity())
+    t2 = Transform.from_components([0, 2, 0], Rotation.identity())
     composed = t1 * t2
-    np.testing.assert_allclose(composed.pos, [1, 2, 0], atol=1e-6)
+    np.testing.assert_allclose(composed.translation, [1, 2, 0], atol=1e-6)
 
 
 # ---------------------------------------------------------------------------
-# __mul__ with Vector3
+# apply (point transformation)
 # ---------------------------------------------------------------------------
 
 
 def test_apply_identity_to_point():
     t = _identity()
-    p = np.array([3, 4, 5], dtype=np.float32)
-    np.testing.assert_allclose(t * p, p, atol=1e-6)
+    p = np.array([3, 4, 5], dtype=np.float64)
+    np.testing.assert_allclose(t.apply(p), p, atol=1e-6)
 
 
 def test_apply_translation_to_point():
-    t = Transform(pos=np.array([1, 2, 3], dtype=np.float32), quat=np.array([0, 0, 0, 1], dtype=np.float32))
-    p = np.array([0, 0, 0], dtype=np.float32)
-    np.testing.assert_allclose(t * p, [1, 2, 3], atol=1e-6)
+    t = Transform.from_components([1, 2, 3], Rotation.identity())
+    np.testing.assert_allclose(t.apply([0, 0, 0]), [1, 2, 3], atol=1e-6)
 
 
 def test_apply_rot_z_90_to_x_axis():
     t = _rot_z(math.pi / 2)
-    p = np.array([1, 0, 0], dtype=np.float32)
-    np.testing.assert_allclose(t * p, [0, 1, 0], atol=1e-6)
+    np.testing.assert_allclose(t.apply([1, 0, 0]), [0, 1, 0], atol=1e-6)
 
 
 def test_apply_rot_z_90_to_y_axis():
     t = _rot_z(math.pi / 2)
-    p = np.array([0, 1, 0], dtype=np.float32)
-    np.testing.assert_allclose(t * p, [-1, 0, 0], atol=1e-6)
+    np.testing.assert_allclose(t.apply([0, 1, 0]), [-1, 0, 0], atol=1e-6)
 
 
 # ---------------------------------------------------------------------------
-# _rotmat_to_quat roundtrip
+# Rotation.from_matrix roundtrip (replaces _rotmat_to_quat tests)
 # ---------------------------------------------------------------------------
 
 
 def test_rotmat_to_quat_identity():
-    q = _rotmat_to_quat(np.eye(3, dtype=np.float32))
-    # Both [0,0,0,1] and [0,0,0,-1] are valid; check the rotation is identity.
-    t = Transform(pos=np.zeros(3, dtype=np.float32), quat=q)
-    np.testing.assert_allclose(t.rotmat, np.eye(3), atol=1e-6)
+    from scipy.spatial.transform import Rotation
+
+    q = Rotation.from_matrix(np.eye(3)).as_quat()
+    np.testing.assert_allclose(np.abs(q), [0, 0, 0, 1], atol=1e-6)
 
 
 def test_rotmat_to_quat_roundtrip():
     original = _rot_z(math.pi / 3)
-    recovered_q = _rotmat_to_quat(original.rotmat)
-    recovered_t = Transform(pos=np.zeros(3, dtype=np.float32), quat=recovered_q)
-    np.testing.assert_allclose(recovered_t.rotmat, original.rotmat, atol=1e-5)
+    recovered = Rotation.from_matrix(original.rotation.as_matrix())
+    np.testing.assert_allclose(recovered.as_matrix(), original.rotation.as_matrix(), atol=1e-5)

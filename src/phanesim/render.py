@@ -1,4 +1,4 @@
-# Copyright 2026, Mateo de Mayo.
+# Copyright 2026, Yutong Wan.
 # SPDX-License-Identifier: BSD-3-Clause
 
 """Blender EEVEE rendering pipeline for Phanesim sequences.
@@ -76,15 +76,6 @@ def project_point(p_cam: Vector3, model: CameraModel) -> tuple[float, float]:
     raise ValueError(f"Unsupported camera model: {model.name!r}. Supported: pinhole, kb4.")
 
 
-def _transform_to_matrix(t: Transform) -> mathutils.Matrix:
-    """Convert a phanesim Transform to a Blender 4x4 Matrix."""
-    x, y, z, w = t.quat.tolist()
-    bquat = mathutils.Quaternion((w, x, y, z))  # Blender quaternion is wxyz
-    mat = bquat.to_matrix().to_4x4()
-    mat.translation = mathutils.Vector(t.pos.tolist())
-    return mat
-
-
 # ---------------------------------------------------------------------------
 # Blender scene helpers
 # ---------------------------------------------------------------------------
@@ -92,7 +83,7 @@ def _transform_to_matrix(t: Transform) -> mathutils.Matrix:
 
 def _set_camera(cam_obj: bpy.types.Object, T_world_cam: Transform) -> None:
     """Position a Blender camera object using a world-frame Transform."""
-    cam_obj.matrix_world = _transform_to_matrix(T_world_cam) @ _OPENCV_TO_BLENDER_CAM
+    cam_obj.matrix_world = mathutils.Matrix(T_world_cam.as_matrix().tolist()) @ _OPENCV_TO_BLENDER_CAM
 
 
 def _set_hand_bones(arm_obj: bpy.types.Object, joint_names: list[str], joint_poses: list[Transform]) -> None:
@@ -114,7 +105,7 @@ def _set_hand_bones(arm_obj: bpy.types.Object, joint_names: list[str], joint_pos
         rest_bone = arm_obj.data.bones.get("Wrist")
         if rest_bone is not None:
             rest_head = mathutils.Vector(rest_bone.head_local)
-            world_wrist = mathutils.Vector(joint_poses[wrist_idx].pos.tolist())
+            world_wrist = mathutils.Vector(joint_poses[wrist_idx].translation.tolist())
             arm_obj.location = world_wrist - rest_head
 
     # Reset all pose bones to rest pose.
@@ -411,7 +402,7 @@ def render_sequence(seq: Sequence, output_path: Path) -> None:
 
                 # Position hand bones and collect 2D projections.
                 row: list[object] = [int(ts)]
-                T_cam_world = T_world_cam.inv
+                T_cam_world = T_world_cam.inv()
 
                 for hand_motion, arm_obj in zip(seq.hand_motions, arm_objs, strict=True):
                     joint_poses = hand_motion.get_joint_poses(ts)
@@ -422,8 +413,8 @@ def render_sequence(seq: Sequence, output_path: Path) -> None:
 
                     # Project each joint to image coordinates.
                     for joint_pose in joint_poses:
-                        p_world = joint_pose.pos
-                        p_cam = T_cam_world * p_world
+                        p_world = joint_pose.translation
+                        p_cam = T_cam_world.apply(p_world)
                         if p_cam[2] > 0:
                             u, v = project_point(p_cam, camera.intrinsics)
                         else:

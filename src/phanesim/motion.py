@@ -1,4 +1,4 @@
-# Copyright 2026, Mateo de Mayo.
+# Copyright 2026, Yutong Wan.
 # SPDX-License-Identifier: BSD-3-Clause
 
 from __future__ import annotations
@@ -9,6 +9,8 @@ from pathlib import Path
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
+
+from scipy.spatial.transform import Rotation
 
 from phanesim.types import Positions, Quaternion, Quaternions, Timestamp, Timestamps, Transform
 
@@ -38,13 +40,13 @@ def _interp_transform(
 ) -> Transform:
     idx = int(np.searchsorted(ts, timestamp))
     if idx == 0:
-        return Transform(pos=xyz[0].copy(), quat=quats[0].copy())
+        return Transform.from_components(xyz[0], Rotation.from_quat(quats[0]))
     if idx >= len(ts):
-        return Transform(pos=xyz[-1].copy(), quat=quats[-1].copy())
+        return Transform.from_components(xyz[-1], Rotation.from_quat(quats[-1]))
     alpha = float(timestamp - ts[idx - 1]) / float(ts[idx] - ts[idx - 1])
-    pos = np.array(xyz[idx - 1] + alpha * (xyz[idx] - xyz[idx - 1]), dtype=np.float32)
+    pos = xyz[idx - 1] + alpha * (xyz[idx] - xyz[idx - 1])
     quat = _slerp(quats[idx - 1], quats[idx], alpha)
-    return Transform(pos=pos, quat=quat)
+    return Transform.from_components(pos, Rotation.from_quat(quat))
 
 
 @dataclass
@@ -117,15 +119,12 @@ class HandMotion:
         poses: list[Transform] = []
         for j in range(len(self.joint_names)):
             if clamp_low:
-                poses.append(Transform(pos=self.joints_xyz[0, j].copy(), quat=self.joints_quats[0, j].copy()))
+                poses.append(Transform.from_components(self.joints_xyz[0, j], Rotation.from_quat(self.joints_quats[0, j])))
             elif clamp_high:
-                poses.append(Transform(pos=self.joints_xyz[-1, j].copy(), quat=self.joints_quats[-1, j].copy()))
+                poses.append(Transform.from_components(self.joints_xyz[-1, j], Rotation.from_quat(self.joints_quats[-1, j])))
             else:
                 alpha = float(timestamp - self.ts[idx - 1]) / float(self.ts[idx] - self.ts[idx - 1])
-                pos = np.array(
-                    self.joints_xyz[idx - 1, j] + alpha * (self.joints_xyz[idx, j] - self.joints_xyz[idx - 1, j]),
-                    dtype=np.float32,
-                )
+                pos = self.joints_xyz[idx - 1, j] + alpha * (self.joints_xyz[idx, j] - self.joints_xyz[idx - 1, j])
                 quat = _slerp(self.joints_quats[idx - 1, j], self.joints_quats[idx, j], alpha)
-                poses.append(Transform(pos=pos, quat=quat))
+                poses.append(Transform.from_components(pos, Rotation.from_quat(quat)))
         return poses

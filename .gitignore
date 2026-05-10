@@ -1,9 +1,17 @@
-# Copyright (c) 2026 Mateo de Mayo
+# Copyright (c) 2026 Yutong Wan
 # SPDX-License-Identifier: BSD-3-Clause
 
 __pycache__/
 *.egg-info/
 *.blend1
 
+
+.venv/
+venv/
+env/
+
 data/
-examples/output/
+examples/minimal/output/
+
+.pytest_cache/
+.ruff_cache/
