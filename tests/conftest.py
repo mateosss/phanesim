@@ -1,4 +1,4 @@
-# Copyright 2026, Mateo de Mayo.
+# Copyright 2026, Yutong Wan.
 # SPDX-License-Identifier: BSD-3-Clause
 
 """Mock bpy and mathutils before any test import so that phanesim.render

@@ -1,4 +1,4 @@
-# Copyright 2026, Mateo de Mayo.
+# Copyright 2026, Yutong Wan.
 # SPDX-License-Identifier: BSD-3-Clause
 
 from __future__ import annotations
@@ -6,10 +6,10 @@ from __future__ import annotations
 import enum
 from dataclasses import dataclass
 from pathlib import Path
-from typing import overload
 
 import numpy as np
 import numpy.typing as npt
+from scipy.spatial.transform import RigidTransform as Transform  # noqa: F401
 
 type Scalar = np.float32
 type Timestamp = np.int64
@@ -23,88 +23,6 @@ type Color = npt.NDArray[np.float32]  # shape (3,) rgb
 type Timestamps = npt.NDArray[np.int64]  # shape (N,) nanoseconds
 type Positions = npt.NDArray[np.float32]  # shape (N, 3)
 type Quaternions = npt.NDArray[np.float32]  # shape (N, 4) xyzw
-
-
-def _rotmat_to_quat(R: Matrix3x3) -> Quaternion:
-    """Convert a 3x3 rotation matrix to a unit quaternion (xyzw)."""
-    trace = R[0, 0] + R[1, 1] + R[2, 2]
-    if trace > 0:
-        s = 0.5 / np.sqrt(trace + 1.0)
-        w = 0.25 / s
-        x = (R[2, 1] - R[1, 2]) * s
-        y = (R[0, 2] - R[2, 0]) * s
-        z = (R[1, 0] - R[0, 1]) * s
-    elif R[0, 0] > R[1, 1] and R[0, 0] > R[2, 2]:
-        s = 2.0 * np.sqrt(1.0 + R[0, 0] - R[1, 1] - R[2, 2])
-        w = (R[2, 1] - R[1, 2]) / s
-        x = 0.25 * s
-        y = (R[0, 1] + R[1, 0]) / s
-        z = (R[0, 2] + R[2, 0]) / s
-    elif R[1, 1] > R[2, 2]:
-        s = 2.0 * np.sqrt(1.0 + R[1, 1] - R[0, 0] - R[2, 2])
-        w = (R[0, 2] - R[2, 0]) / s
-        x = (R[0, 1] + R[1, 0]) / s
-        y = 0.25 * s
-        z = (R[1, 2] + R[2, 1]) / s
-    else:
-        s = 2.0 * np.sqrt(1.0 + R[2, 2] - R[0, 0] - R[1, 1])
-        w = (R[1, 0] - R[0, 1]) / s
-        x = (R[0, 2] + R[2, 0]) / s
-        y = (R[1, 2] + R[2, 1]) / s
-        z = 0.25 * s
-    return np.array([x, y, z, w], dtype=np.float32)
-
-
-@dataclass(eq=False)
-class Transform:
-    """Rigid body transform T_a_b: maps points from frame b to frame a (p_a = T_a_b * p_b)."""
-
-    pos: Vector3  # xyz translation
-    quat: Quaternion  # xyzw unit quaternion
-
-    @property
-    def rotmat(self) -> Matrix3x3:
-        x, y, z, w = self.quat
-        return np.array(
-            [
-                [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
-                [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
-                [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)],
-            ],
-            dtype=np.float32,
-        )
-
-    @property
-    def mat(self) -> Matrix4x4:
-        T = np.eye(4, dtype=np.float32)
-        T[:3, :3] = self.rotmat
-        T[:3, 3] = self.pos
-        return T
-
-    @property
-    def inv(self) -> Transform:
-        R_inv = self.rotmat.T
-        x, y, z, w = self.quat
-        norm_sq = float(x * x + y * y + z * z + w * w)
-        return Transform(
-            pos=np.array(-(R_inv @ self.pos), dtype=np.float32),
-            quat=np.array([-x, -y, -z, w], dtype=np.float32) / norm_sq,
-        )
-
-    @overload
-    def __mul__(self, other: Transform) -> Transform: ...
-
-    @overload
-    def __mul__(self, other: Vector3) -> Vector3: ...
-
-    def __mul__(self, other: Transform | Vector3) -> Transform | Vector3:
-        if isinstance(other, Transform):
-            m = self.mat @ other.mat
-            return Transform(
-                pos=np.array(m[:3, 3], dtype=np.float32),
-                quat=_rotmat_to_quat(m[:3, :3]),
-            )
-        return np.array(self.rotmat @ other + self.pos, dtype=np.float32)
 
 
 @dataclass

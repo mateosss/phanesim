@@ -1,4 +1,4 @@
-# Copyright 2026, Mateo de Mayo.
+# Copyright 2026, Yutong Wan.
 # SPDX-License-Identifier: BSD-3-Clause
 
 from __future__ import annotations
@@ -105,32 +105,32 @@ def test_camera_motion_loads(cam_csv):
 def test_camera_motion_at_start(cam_csv):
     cm = CameraMotion.from_path(cam_csv)
     pose = cm.get_pose(np.int64(0))
-    np.testing.assert_allclose(pose.pos, [0, 0, 0], atol=1e-6)
-    np.testing.assert_allclose(np.abs(pose.quat), [0, 0, 0, 1], atol=1e-6)
+    np.testing.assert_allclose(pose.translation, [0, 0, 0], atol=1e-6)
+    np.testing.assert_allclose(np.abs(pose.rotation.as_quat()), [0, 0, 0, 1], atol=1e-6)
 
 
 def test_camera_motion_at_end(cam_csv):
     cm = CameraMotion.from_path(cam_csv)
     pose = cm.get_pose(np.int64(1_000_000_000))
-    np.testing.assert_allclose(pose.pos, [1, 0, 0], atol=1e-6)
+    np.testing.assert_allclose(pose.translation, [1, 0, 0], atol=1e-6)
 
 
 def test_camera_motion_midpoint_lerp(cam_csv):
     cm = CameraMotion.from_path(cam_csv)
     pose = cm.get_pose(np.int64(500_000_000))
-    np.testing.assert_allclose(pose.pos, [0.5, 0, 0], atol=1e-6)
+    np.testing.assert_allclose(pose.translation, [0.5, 0, 0], atol=1e-6)
 
 
 def test_camera_motion_before_start_clamps(cam_csv):
     cm = CameraMotion.from_path(cam_csv)
     pose = cm.get_pose(np.int64(-1))
-    np.testing.assert_allclose(pose.pos, [0, 0, 0], atol=1e-6)
+    np.testing.assert_allclose(pose.translation, [0, 0, 0], atol=1e-6)
 
 
 def test_camera_motion_after_end_clamps(cam_csv):
     cm = CameraMotion.from_path(cam_csv)
     pose = cm.get_pose(np.int64(2_000_000_000))
-    np.testing.assert_allclose(pose.pos, [1, 0, 0], atol=1e-6)
+    np.testing.assert_allclose(pose.translation, [1, 0, 0], atol=1e-6)
 
 
 # ---------------------------------------------------------------------------
@@ -150,31 +150,31 @@ def test_hand_motion_at_start(hand_csv):
     hm = HandMotion.from_path(hand_csv)
     poses = hm.get_joint_poses(np.int64(0))
     assert len(poses) == 2
-    np.testing.assert_allclose(poses[0].pos, [0, 0, 0], atol=1e-6)
-    np.testing.assert_allclose(poses[1].pos, [0.1, 0, 0], atol=1e-6)
+    np.testing.assert_allclose(poses[0].translation, [0, 0, 0], atol=1e-6)
+    np.testing.assert_allclose(poses[1].translation, [0.1, 0, 0], atol=1e-6)
 
 
 def test_hand_motion_at_end(hand_csv):
     hm = HandMotion.from_path(hand_csv)
     poses = hm.get_joint_poses(np.int64(1_000_000_000))
-    np.testing.assert_allclose(poses[0].pos, [1, 0, 0], atol=1e-6)
-    np.testing.assert_allclose(poses[1].pos, [1.1, 0, 0], atol=1e-6)
+    np.testing.assert_allclose(poses[0].translation, [1, 0, 0], atol=1e-6)
+    np.testing.assert_allclose(poses[1].translation, [1.1, 0, 0], atol=1e-6)
 
 
 def test_hand_motion_midpoint_lerp(hand_csv):
     hm = HandMotion.from_path(hand_csv)
     poses = hm.get_joint_poses(np.int64(500_000_000))
-    np.testing.assert_allclose(poses[0].pos, [0.5, 0, 0], atol=1e-6)
-    np.testing.assert_allclose(poses[1].pos, [0.6, 0, 0], atol=1e-5)
+    np.testing.assert_allclose(poses[0].translation, [0.5, 0, 0], atol=1e-6)
+    np.testing.assert_allclose(poses[1].translation, [0.6, 0, 0], atol=1e-5)
 
 
 def test_hand_motion_before_start_clamps(hand_csv):
     hm = HandMotion.from_path(hand_csv)
     poses = hm.get_joint_poses(np.int64(-1))
-    np.testing.assert_allclose(poses[0].pos, [0, 0, 0], atol=1e-6)
+    np.testing.assert_allclose(poses[0].translation, [0, 0, 0], atol=1e-6)
 
 
 def test_hand_motion_after_end_clamps(hand_csv):
     hm = HandMotion.from_path(hand_csv)
     poses = hm.get_joint_poses(np.int64(2_000_000_000))
-    np.testing.assert_allclose(poses[0].pos, [1, 0, 0], atol=1e-6)
+    np.testing.assert_allclose(poses[0].translation, [1, 0, 0], atol=1e-6)

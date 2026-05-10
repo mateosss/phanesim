@@ -1,4 +1,4 @@
-# Copyright 2026, Mateo de Mayo.
+# Copyright 2026, Yutong Wan.
 # SPDX-License-Identifier: BSD-3-Clause
 
 from __future__ import annotations
@@ -8,15 +8,16 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+from scipy.spatial.transform import Rotation
 
 from phanesim.motion import CameraMotion, HandMotion
 from phanesim.types import Camera, CameraModel, Color, Hand, Shutter, Transform, Vignette
 
 
 def _transform_from_dict(data: dict) -> Transform:
-    return Transform(
-        pos=np.array(data["pos"], dtype=np.float32),
-        quat=np.array(data["quat"], dtype=np.float32),
+    return Transform.from_components(
+        translation=np.array(data["pos"], dtype=np.float64),
+        rotation=Rotation.from_quat(data["quat"]),  # xyzw scalar-last
     )
 
 
