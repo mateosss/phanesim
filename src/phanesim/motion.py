@@ -118,9 +118,13 @@ class HandMotion:
         poses: list[Transform] = []
         for j in range(len(self.joint_names)):
             if clamp_low:
-                poses.append(Transform.from_components(self.joints_xyz[0, j], Rotation.from_quat(self.joints_quats[0, j])))
+                poses.append(
+                    Transform.from_components(self.joints_xyz[0, j], Rotation.from_quat(self.joints_quats[0, j]))
+                )
             elif clamp_high:
-                poses.append(Transform.from_components(self.joints_xyz[-1, j], Rotation.from_quat(self.joints_quats[-1, j])))
+                poses.append(
+                    Transform.from_components(self.joints_xyz[-1, j], Rotation.from_quat(self.joints_quats[-1, j]))
+                )
             else:
                 alpha = float(timestamp - self.ts[idx - 1]) / float(self.ts[idx] - self.ts[idx - 1])
                 pos = self.joints_xyz[idx - 1, j] + alpha * (self.joints_xyz[idx, j] - self.joints_xyz[idx - 1, j])
