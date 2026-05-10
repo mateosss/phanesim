@@ -9,7 +9,6 @@ from pathlib import Path
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
-
 from scipy.spatial.transform import Rotation
 
 from phanesim.types import Positions, Quaternion, Quaternions, Timestamp, Timestamps, Transform
