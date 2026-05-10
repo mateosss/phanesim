@@ -1,4 +1,4 @@
-# Copyright 2026, Mateo de Mayo.
+# Copyright 2026, Yutong Wan.
 # SPDX-License-Identifier: BSD-3-Clause
 
 from __future__ import annotations
@@ -166,3 +166,4 @@ class Hand:
     scale_thickness: float = 1.0
     texture: Path | None = None
     color_multiply: Color | None = None
+

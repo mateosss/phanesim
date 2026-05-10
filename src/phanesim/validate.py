@@ -1,4 +1,4 @@
-# Copyright 2026, Mateo de Mayo.
+# Copyright 2026, Yutong Wan.
 # SPDX-License-Identifier: BSD-3-Clause
 
 from __future__ import annotations
@@ -69,3 +69,4 @@ def validate_hand_motion(path: Path) -> None:
         expected = [f"{name}_x", f"{name}_y", f"{name}_z", f"{name}_qx", f"{name}_qy", f"{name}_qz", f"{name}_qw"]
         if group != expected:
             raise ValueError(f"hand_motion CSV: expected columns {expected} at position {i}, got {group}")
+
