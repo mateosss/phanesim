@@ -42,6 +42,13 @@ from phanesim.types import Camera, CameraModel, Transform, Vector3
 # 180° rotation around X: converts OpenCV camera frame to Blender camera frame.
 _OPENCV_TO_BLENDER_CAM = mathutils.Matrix.Rotation(math.pi, 4, "X")
 
+# The hand.blend armature has rotation_mode='QUATERNION' with a baked base
+# quaternion of 180° around -Z (w=0, z=-1).  Wrist CSV rotations are composed
+# with this base so CSV identity preserves the rest-pose appearance.
+# NOTE: this constant is specific to hand.blend; a different rig may need a
+# different value.  Future work: read it from the blend file at load time.
+_ARM_BASE_QUAT = mathutils.Quaternion((0.0, 0.0, 0.0, -1.0))
+
 
 # ---------------------------------------------------------------------------
 # Pure-math projection (no bpy dependency)
@@ -87,30 +94,61 @@ def _set_camera(cam_obj: bpy.types.Object, T_world_cam: Transform) -> None:
 
 
 def _set_hand_bones(arm_obj: bpy.types.Object, joint_names: list[str], joint_poses: list[Transform]) -> None:
-    """Position the armature using the wrist joint, then reset all bones to rest pose.
+    """Position the armature and apply wrist rotation from the CSV.
 
-    The wrist joint world position (from the CSV) is used to translate the
-    armature object so the Wrist bone ends up at the correct world location.
-    This covers the "wrist_elbow pose" anchoring step.  All pose bones are then
-    reset to identity matrix_basis (rest pose).
+    The CSV wrist quaternion is relative to the blend file's baked base orientation
+    (_ARM_BASE_QUAT).  Total rotation = _ARM_BASE_QUAT @ q_csv, so CSV identity
+    preserves the original rest-pose look (back of hand visible from above), while
+    a 180° Z CSV rotation flips to show the palm (pronation/supination).
 
-    Finger bending from CSV quaternions is not applied: the tracking quaternions
-    differ ~180° from Blender's bone rest orientations, causing vertex explosion
-    via pose_bone.matrix.  Rest-pose shapes are used until coordinate-frame
-    calibration is implemented.
+    The armature object location is recalculated each frame so the Wrist bone
+    stays exactly at the CSV world position regardless of rotation.
+    Non-wrist joints named in the CSV are driven by applying their quaternion
+    directly as matrix_basis (bone-local rotation relative to rest pose).
+    Finger flexion is rotation around each bone's local X axis.
     """
-    # Anchor the armature at the wrist world position from the CSV.
-    wrist_idx = next((i for i, n in enumerate(joint_names) if n.lower() == "wrist"), None)
-    if wrist_idx is not None:
-        rest_bone = arm_obj.data.bones.get("Wrist")
-        if rest_bone is not None:
-            rest_head = mathutils.Vector(rest_bone.head_local)
-            world_wrist = mathutils.Vector(joint_poses[wrist_idx].translation.tolist())
-            arm_obj.location = world_wrist - rest_head
-
     # Reset all pose bones to rest pose.
     for pb in arm_obj.pose.bones:
         pb.matrix_basis = mathutils.Matrix.Identity(4)
+
+    wrist_idx = next((i for i, n in enumerate(joint_names) if n.lower() == "wrist"), None)
+    if wrist_idx is None:
+        return
+
+    world_wrist = mathutils.Vector(joint_poses[wrist_idx].translation.tolist())
+
+    # Compose: blend-file base orientation + CSV relative rotation.
+    # CSV identity keeps the original rest-pose look (back of hand up);
+    # CSV 180° around Z flips to show the palm.
+    # scipy as_quat() → [x, y, z, w]; Blender Quaternion → [w, x, y, z].
+    q = joint_poses[wrist_idx].rotation.as_quat()
+    q_csv = mathutils.Quaternion((q[3], q[0], q[1], q[2]))
+    q_total = _ARM_BASE_QUAT @ q_csv
+
+    arm_obj.rotation_mode = "QUATERNION"
+    arm_obj.rotation_quaternion = q_total
+
+    # Keep Wrist bone at CSV world position: location = world_wrist - R @ rest_head.
+    rest_head = mathutils.Vector(arm_obj.data.bones["Wrist"].head_local)
+    arm_obj.location = world_wrist - q_total.to_matrix() @ rest_head
+
+    # Apply per-finger bone rotations from the CSV.
+    # For non-wrist joints the CSV quaternion is interpreted as bone-local rotation
+    # (i.e. directly as matrix_basis).  matrix_basis identity = rest pose, so
+    # bending is expressed as a rotation relative to rest — no base-quat composition
+    # needed here, unlike the whole-armature wrist rotation above.
+    # Flexion (curling toward palm) is rotation around each bone's local X axis.
+    for i, name in enumerate(joint_names):
+        if name.lower() == "wrist":
+            continue
+        pb = arm_obj.pose.bones.get(name)
+        if pb is None:
+            # Case-insensitive fallback.
+            pb = next((b for b in arm_obj.pose.bones if b.name.lower() == name.lower()), None)
+        if pb is None:
+            continue
+        q = joint_poses[i].rotation.as_quat()  # [x, y, z, w]
+        pb.matrix_basis = mathutils.Quaternion((q[3], q[0], q[1], q[2])).to_matrix().to_4x4()
 
 
 def _load_hand_model(hand_model_path: Path) -> bpy.types.Object:
@@ -196,6 +234,30 @@ def _apply_pbr_material(obj: bpy.types.Object, texture_map: dict[str, str]) -> N
     bsdf.location = (0, 0)
     links.new(bsdf.outputs["BSDF"], out.inputs["Surface"])
 
+    # -----------------------------------------------------------------------
+    # NEW: Set Matte Skin Default Values
+    # These apply if textures are missing or act as a base for blending.
+    # -----------------------------------------------------------------------
+
+    # 1. Base skin tone (approximating the image provided)
+    bsdf.inputs["Base Color"].default_value = (0.65, 0.40, 0.30, 1.0)
+
+    # 2. High roughness for a matte, non-glossy finish (0.0 is mirror, 1.0 is flat)
+    bsdf.inputs["Roughness"].default_value = 0.75
+
+    # 3. Lower specular highlights to prevent the "wet plastic" look
+    # (Blender 4.0+ renamed "Specular" to "Specular IOR Level")
+    if "Specular IOR Level" in bsdf.inputs:
+        bsdf.inputs["Specular IOR Level"].default_value = 0.2
+    elif "Specular" in bsdf.inputs:
+        bsdf.inputs["Specular"].default_value = 0.2
+
+    # 4. Optional: Add a tiny bit of Subsurface Scattering for flesh softness
+    if "Subsurface Weight" in bsdf.inputs:
+        bsdf.inputs["Subsurface Weight"].default_value = 0.05
+    elif "Subsurface" in bsdf.inputs:
+        bsdf.inputs["Subsurface"].default_value = 0.05
+
     def _add_tex(role: str, x: float, y: float, color_space: str = "Non-Color") -> bpy.types.Node | None:
         if role not in texture_map:
             return None
@@ -212,7 +274,13 @@ def _apply_pbr_material(obj: bpy.types.Object, texture_map: dict[str, str]) -> N
 
     rough = _add_tex("roughness", -600, 0)
     if rough:
-        links.new(rough.outputs["Color"], bsdf.inputs["Roughness"])
+        # 1. Create an Invert Node
+        invert = nodes.new("ShaderNodeInvert")
+        invert.location = (-300, 0)  # Place it between the texture and the BSDF
+
+        # 2. Link Texture -> Invert Node -> BSDF Roughness
+        links.new(rough.outputs["Color"], invert.inputs["Color"])
+        links.new(invert.outputs["Color"], bsdf.inputs["Roughness"])
 
     bump = _add_tex("normal", -800, -200)
     if bump:
@@ -309,9 +377,9 @@ def _configure_render(scene: bpy.types.Scene, camera: Camera, cam_obj: bpy.types
     bpy_cam.clip_start = 0.01
     bpy_cam.clip_end = 200.0
 
-    if camera.motion_blur:
+    if getattr(camera, "motion_blur", False):
         scene.render.use_motion_blur = True
-    if camera.shutter.value == "rolling":
+    if getattr(camera, "shutter", None) == "rolling":
         scene.render.use_motion_blur = True
 
 
@@ -404,17 +472,24 @@ def render_sequence(seq: Sequence, output_path: Path) -> None:
                 row: list[object] = [int(ts)]
                 T_cam_world = T_world_cam.inv()
 
-                for hand_motion, arm_obj in zip(seq.hand_motions, arm_objs, strict=True):
+                for h, (hand_motion, arm_obj) in enumerate(zip(seq.hand_motions, arm_objs, strict=True)):
                     joint_poses = hand_motion.get_joint_poses(ts)
 
                     # Pose the armature via Python API (no mode switching needed).
                     _set_hand_bones(arm_obj, hand_motion.joint_names, joint_poses)
                     bpy.context.view_layer.update()
 
+                    # T_c_h[c][h]: transform from hand frame to camera frame.
+                    # Joint poses from the CSV are in world frame, so we compose:
+                    # p_cam = T_cam_world * T_world_hand * p_joint_local
+                    # With T_c_h = identity (default) this reduces to T_cam_world.
+                    T_c_h = rig.T_c_h[c][h]
+                    T_cam_hand = T_cam_world * T_c_h
+
                     # Project each joint to image coordinates.
                     for joint_pose in joint_poses:
                         p_world = joint_pose.translation
-                        p_cam = T_cam_world.apply(p_world)
+                        p_cam = T_cam_hand.apply(p_world)
                         if p_cam[2] > 0:
                             u, v = project_point(p_cam, camera.intrinsics)
                         else:
