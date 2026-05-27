@@ -1,0 +1,71 @@
+{
+  "name": "minimal_pinch",
+  "output_path": "minimal_pinch",
+  "camhand_rig": {
+    "cameras": [
+      {
+        "name": "cam0",
+        "T_b_c": {
+          "pos": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "quat": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        },
+        "intrinsics": {
+          "name": "pinhole",
+          "parameters": {
+            "fx": 1000.0,
+            "fy": 1000.0,
+            "cx": 320.0,
+            "cy": 240.0
+          }
+        },
+        "resolution": [
+          640,
+          480
+        ],
+        "frequency": 30.0,
+        "pixel_format": "RGB24",
+        "shutter": "global",
+        "exposure": 0,
+        "gain": 0
+      }
+    ],
+    "hands": [
+      {
+        "name": "right",
+        "model": "../../hand.blend"
+      }
+    ],
+    "T_c_h": [
+      [
+        {
+          "pos": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "quat": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        }
+      ]
+    ]
+  },
+  "cam_motions": [
+    "cam_motion.csv"
+  ],
+  "hand_motions": [
+    "hand_motion_pinch.csv"
+  ]
+}
