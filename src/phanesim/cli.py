@@ -13,12 +13,12 @@ import jsonschema
 
 import phanesim.validate as val
 
-# Parent directory of the phanesim package — added to sys.path inside Blender
+# Parent directory of the phanesim package, added to sys.path inside Blender
 # so that `import phanesim` works in the headless rendering subprocess.
 _PKG_PARENT = str(Path(__file__).parent.parent)
 
-# Site-packages of the active venv — injected into Blender's Python so that
-# third-party dependencies (scipy, pandas, numpy, …) are importable there.
+# Site-packages of the active venv, injected into Blender's Python so that
+# third-party dependencies (scipy, pandas, numpy) are importable there.
 _SITE_PACKAGES = sysconfig.get_paths()["purelib"]
 
 VALIDATE_KINDS = (

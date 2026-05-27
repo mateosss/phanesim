@@ -135,7 +135,7 @@ def _set_hand_bones(arm_obj: bpy.types.Object, joint_names: list[str], joint_pos
     # Apply per-finger bone rotations from the CSV.
     # For non-wrist joints the CSV quaternion is interpreted as bone-local rotation
     # (i.e. directly as matrix_basis).  matrix_basis identity = rest pose, so
-    # bending is expressed as a rotation relative to rest — no base-quat composition
+    # bending is expressed as a rotation relative to rest; no base-quat composition
     # needed here, unlike the whole-armature wrist rotation above.
     # Flexion (curling toward palm) is rotation around each bone's local X axis.
     for i, name in enumerate(joint_names):
@@ -430,7 +430,7 @@ def render_sequence(seq: Sequence, output_path: Path) -> None:
         *(m.ts[-1] for m in seq.hand_motions),
     )
 
-    # Add lighting — factory-startup gives an empty scene with no lights.
+    # Add lighting; factory-startup gives an empty scene with no lights.
     sun_obj, sun_data = _add_sun_light()
     _setup_world_light(scene)
 

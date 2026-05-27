@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "defs.json",
+  "title": "Common definitions",
+  "$defs": {
+    "transform": {
+      "type": "object",
+      "required": ["pos", "quat"],
+      "additionalProperties": false,
+      "properties": {
+        "pos": {
+          "type": "array",
+          "items": {"type": "number"},
+          "minItems": 3,
+          "maxItems": 3
+        },
+        "quat": {
+          "type": "array",
+          "description": "Unit quaternion [x, y, z, w], scalar w last",
+          "prefixItems": [
+            {"type": "number", "title": "x"},
+            {"type": "number", "title": "y"},
+            {"type": "number", "title": "z"},
+            {"type": "number", "title": "w (scalar)"}
+          ],
+          "minItems": 4,
+          "maxItems": 4
+        }
+      }
+    }
+  }
+}

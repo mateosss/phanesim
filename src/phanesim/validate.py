@@ -9,17 +9,25 @@ from pathlib import Path
 
 import jsonschema
 import pandas as pd
+from referencing import Registry, Resource
 
 
-def _load_schema(name: str) -> dict:
-    schemas = importlib.resources.files("phanesim") / "schemas"
-    return json.loads((schemas / name).read_text())  # type: ignore[arg-type]
+def _build_registry() -> Registry:
+    schemas_dir = importlib.resources.files("phanesim") / "schemas"
+    registry: Registry = Registry()
+    for entry in schemas_dir.iterdir():  # type: ignore[union-attr]
+        if entry.name.endswith(".json"):
+            schema = json.loads(entry.read_text())  # type: ignore[arg-type]
+            if "$id" in schema:
+                registry = registry.with_resource(schema["$id"], Resource.from_contents(schema))
+    return registry
 
 
 def _validate_json(path: Path, schema_name: str) -> None:
-    schema = _load_schema(schema_name)
+    schemas_dir = importlib.resources.files("phanesim") / "schemas"
+    schema = json.loads((schemas_dir / schema_name).read_text())  # type: ignore[arg-type]
     data = json.loads(path.read_text())
-    jsonschema.validate(data, schema)
+    jsonschema.Draft202012Validator(schema, registry=_build_registry()).validate(data)
 
 
 def validate_camera(path: Path) -> None:
