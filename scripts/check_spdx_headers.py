@@ -14,8 +14,15 @@ IGNORE_FILES = {"LICENSE"}
 
 # File types where an inline SPDX header is structurally impossible:
 IGNORE_EXTENSIONS = {
-    ".blend", ".png", ".jpg", ".jpeg", ".tiff", ".tga", ".exr",  # binary
-    ".json", ".csv",  # data formats with no comment syntax
+    ".blend",
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".tiff",
+    ".tga",
+    ".exr",  # binary
+    ".json",
+    ".csv",  # data formats with no comment syntax
 }
 
 
@@ -44,9 +51,7 @@ def main() -> int:
         text=True,
     ).splitlines()
     tracked_files = [
-        f for f in tracked_files
-        if Path(f).name not in IGNORE_FILES
-        and Path(f).suffix.lower() not in IGNORE_EXTENSIONS
+        f for f in tracked_files if Path(f).name not in IGNORE_FILES and Path(f).suffix.lower() not in IGNORE_EXTENSIONS
     ]
 
     missing_headers = []

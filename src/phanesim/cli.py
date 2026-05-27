@@ -89,9 +89,7 @@ def generate(kind: str, input_path: Path, output_path: Path, blender_bin: str | 
     input_abs = str(input_path.resolve())
     output_abs = str(output_path.resolve())
 
-    sys_path_setup = (
-        f"import sys; sys.path[0:0] = [{_SITE_PACKAGES!r}, {_PKG_PARENT!r}]; "
-    )
+    sys_path_setup = f"import sys; sys.path[0:0] = [{_SITE_PACKAGES!r}, {_PKG_PARENT!r}]; "
     if kind == "sequence":
         expr = (
             sys_path_setup
