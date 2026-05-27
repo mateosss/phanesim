@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import sysconfig
 from pathlib import Path
 
 import click
@@ -15,6 +16,10 @@ import phanesim.validate as val
 # Parent directory of the phanesim package — added to sys.path inside Blender
 # so that `import phanesim` works in the headless rendering subprocess.
 _PKG_PARENT = str(Path(__file__).parent.parent)
+
+# Site-packages of the active venv — injected into Blender's Python so that
+# third-party dependencies (scipy, pandas, numpy, …) are importable there.
+_SITE_PACKAGES = sysconfig.get_paths()["purelib"]
 
 VALIDATE_KINDS = (
     "camera",
@@ -84,21 +89,24 @@ def generate(kind: str, input_path: Path, output_path: Path, blender_bin: str | 
     input_abs = str(input_path.resolve())
     output_abs = str(output_path.resolve())
 
+    sys_path_setup = (
+        f"import sys; sys.path[0:0] = [{_SITE_PACKAGES!r}, {_PKG_PARENT!r}]; "
+    )
     if kind == "sequence":
         expr = (
-            f"import sys; sys.path.insert(0, {_PKG_PARENT!r}); "
-            "from pathlib import Path; "
-            "from phanesim.rig import Sequence; "
-            "from phanesim.render import render_sequence; "
-            f"render_sequence(Sequence.from_path(Path({input_abs!r})), Path({output_abs!r}))"
+            sys_path_setup
+            + "from pathlib import Path; "
+            + "from phanesim.rig import Sequence; "
+            + "from phanesim.render import render_sequence; "
+            + f"render_sequence(Sequence.from_path(Path({input_abs!r})), Path({output_abs!r}))"
         )
     else:
         expr = (
-            f"import sys; sys.path.insert(0, {_PKG_PARENT!r}); "
-            "from pathlib import Path; "
-            "from phanesim.rig import Project; "
-            "from phanesim.render import render_project; "
-            f"render_project(Project.from_path(Path({input_abs!r})), Path({output_abs!r}))"
+            sys_path_setup
+            + "from pathlib import Path; "
+            + "from phanesim.rig import Project; "
+            + "from phanesim.render import render_project; "
+            + f"render_project(Project.from_path(Path({input_abs!r})), Path({output_abs!r}))"
         )
 
     blender = blender_bin or "blender"

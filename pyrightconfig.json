@@ -1,6 +1,3 @@
-// Copyright 2026, Yutong Wan.
-// SPDX-License-Identifier: BSD-3-Clause
-
 {
   "include": ["."],
   "exclude": [".venv", "**/__pycache__", "**/*.egg-info"],

@@ -9,26 +9,14 @@ from pathlib import Path
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
-from scipy.spatial.transform import Rotation
+from scipy.spatial.transform import Rotation, Slerp
 
 from phanesim.types import Positions, Quaternion, Quaternions, Timestamp, Timestamps, Transform
 
 
 def _slerp(q0: Quaternion, q1: Quaternion, t: float) -> Quaternion:
-    dot = float(np.dot(q0, q1))
-    if dot < 0.0:  # take shortest arc
-        q1 = -q1
-        dot = -dot
-    dot = min(dot, 1.0)
-    if dot > 0.9995:  # nearly identical — fall back to normalised lerp
-        result = q0 + t * (q1 - q0)
-        return np.array(result / np.linalg.norm(result), dtype=np.float32)
-    theta_0 = float(np.arccos(dot))
-    theta = theta_0 * t
-    sin_theta_0 = np.sin(theta_0)
-    s0 = np.cos(theta) - dot * np.sin(theta) / sin_theta_0
-    s1 = np.sin(theta) / sin_theta_0
-    return np.array(s0 * q0 + s1 * q1, dtype=np.float32)
+    rots = Rotation.from_quat(np.stack([q0, q1]))
+    return np.array(Slerp([0.0, 1.0], rots)([t]).as_quat()[0], dtype=np.float32)
 
 
 def _interp_transform(

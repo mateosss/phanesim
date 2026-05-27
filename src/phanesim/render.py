@@ -191,7 +191,7 @@ def _load_hand_model(hand_model_path: Path) -> bpy.types.Object:
 
 
 # ---------------------------------------------------------------------------
-# PBR texture application  (teacher-provided API + helpers)
+# The texture application (temporary, will be replaced by a more robust material system in the future)
 # ---------------------------------------------------------------------------
 
 # Maps a PBR role to filename keywords that identify it.

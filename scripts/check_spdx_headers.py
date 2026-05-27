@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-# Copyright 2026, Mateo de Mayo.
+# Copyright 2026, Yutong Wan
 # SPDX-License-Identifier: BSD-3-Clause
 
 from __future__ import annotations
@@ -11,6 +11,12 @@ from pathlib import Path
 
 SIDE_CAR_SUFFIX = ".spdx"
 IGNORE_FILES = {"LICENSE"}
+
+# File types where an inline SPDX header is structurally impossible:
+IGNORE_EXTENSIONS = {
+    ".blend", ".png", ".jpg", ".jpeg", ".tiff", ".tga", ".exr",  # binary
+    ".json", ".csv",  # data formats with no comment syntax
+}
 
 
 def has_spdx_header(file_path: Path) -> bool:
@@ -37,7 +43,11 @@ def main() -> int:
         ["git", "-C", str(repository_root), "ls-files"],
         text=True,
     ).splitlines()
-    tracked_files = [f for f in tracked_files if Path(f).name not in IGNORE_FILES]
+    tracked_files = [
+        f for f in tracked_files
+        if Path(f).name not in IGNORE_FILES
+        and Path(f).suffix.lower() not in IGNORE_EXTENSIONS
+    ]
 
     missing_headers = []
     for relative_path in tracked_files:
