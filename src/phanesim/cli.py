@@ -68,6 +68,7 @@ def _find_blender(blender_bin: str | None) -> str:
 
     return "blender"
 
+
 VALIDATE_KINDS = (
     "camera",
     "camera_motion",
