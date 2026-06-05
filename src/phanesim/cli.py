@@ -65,6 +65,53 @@ def _find_blender(blender_bin: str | None) -> str:
     return "blender"
 
 
+
+def _find_blender(blender_bin: str | None) -> str:
+    """Resolve the Blender executable path.
+
+    Resolution order:
+    1. Explicit --blender argument or BLENDER_BIN environment variable.
+    2. Any binary named blender* found on PATH (e.g. blender,blender4,
+       blender-4.3).
+    3. Any shell alias whose name or target path contains "blender", resolved
+       through bash so that aliases defined in ~/.bashrc are visible.
+    4. Falls back to "blender" and lets the OS raise a clear error.
+    """
+    if blender_bin:
+        return blender_bin
+
+    # 1. Any blender* binary on PATH.
+    for directory in os.environ.get("PATH", "").split(os.pathsep):
+        try:
+            for name in sorted(Path(directory).iterdir()):
+                if name.stem.lower().startswith("blender") and os.access(name, os.X_OK):
+                    return str(name)
+        except OSError:
+            pass
+
+    # 2. Scan all shell aliases for anything whose name or target contains "blender".
+    try:
+        res = subprocess.run(
+            ["bash", "-ic", "alias 2>/dev/null"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        for line in res.stdout.splitlines():
+            # Each line: alias blender5='/path/to/blender'
+            if "blender" not in line.lower():
+                continue
+            if "=" not in line:
+                continue
+            alias_path = line.split("=", 1)[1].strip().strip("'`\"")
+            if alias_path and Path(alias_path).is_file() and os.access(alias_path, os.X_OK):
+                return alias_path
+    except Exception:
+        pass
+
+    return "blender"
+
+
 VALIDATE_KINDS = (
     "camera",
     "camera_motion",
@@ -124,7 +171,7 @@ def validate(kind: str, input_path: Path) -> None:
     default=None,
     envvar="BLENDER_BIN",
     show_envvar=True,
-    help="Path to the Blender executable (default: 'blender' on PATH).",
+    help="Path to the Blender executable. Auto-detected as 'blender5' or 'blender' if not set.",
 )
 def generate(kind: str, input_path: Path, output_path: Path, blender_bin: str | None) -> None:
     """Render a sequence or project by driving Blender headlessly.

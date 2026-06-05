@@ -203,6 +203,9 @@ uv run phanesim preview sequence data/sequences/minimal/sequence.json --output p
 
 # generates the sequence: renders images and csv with groundtruth 2d joint positions
 
+uv run phanesim generate sequence data/sequences/minimal/sequence.json --output output_folder
+# Render PNG frames to disk (headless, based on existing command)
+
 ./phanesim generate project project.json --output output_project_folder
 # generates all the sequences in the project, each in a separate folder under output_project_folder
 ```
