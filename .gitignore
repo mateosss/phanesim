@@ -12,6 +12,8 @@ env/
 
 data/
 examples/minimal/output/
+output*/
+preview*
 
 .pytest_cache/
 .ruff_cache/

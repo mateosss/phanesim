@@ -252,11 +252,11 @@ def _apply_pbr_material(obj: bpy.types.Object, texture_map: dict[str, str]) -> N
     elif "Specular" in bsdf.inputs:
         bsdf.inputs["Specular"].default_value = 0.2
 
-    # 4. Optional: Add a tiny bit of Subsurface Scattering for flesh softness
+    # SSS off by default: EEVEE SSS looks waxy/translucent without proper radius tuning.
     if "Subsurface Weight" in bsdf.inputs:
-        bsdf.inputs["Subsurface Weight"].default_value = 0.05
+        bsdf.inputs["Subsurface Weight"].default_value = 0.0
     elif "Subsurface" in bsdf.inputs:
-        bsdf.inputs["Subsurface"].default_value = 0.05
+        bsdf.inputs["Subsurface"].default_value = 0.0
 
     def _add_tex(role: str, x: float, y: float, color_space: str = "Non-Color") -> bpy.types.Node | None:
         if role not in texture_map:
@@ -272,15 +272,10 @@ def _apply_pbr_material(obj: bpy.types.Object, texture_map: dict[str, str]) -> N
     if albedo:
         links.new(albedo.outputs["Color"], bsdf.inputs["Base Color"])
 
+    # Roughness map used directly (white=rough, black=smooth — standard PBR convention).
     rough = _add_tex("roughness", -600, 0)
     if rough:
-        # 1. Create an Invert Node
-        invert = nodes.new("ShaderNodeInvert")
-        invert.location = (-300, 0)  # Place it between the texture and the BSDF
-
-        # 2. Link Texture -> Invert Node -> BSDF Roughness
-        links.new(rough.outputs["Color"], invert.inputs["Color"])
-        links.new(invert.outputs["Color"], bsdf.inputs["Roughness"])
+        links.new(rough.outputs["Color"], bsdf.inputs["Roughness"])
 
     bump = _add_tex("normal", -800, -200)
     if bump:
@@ -289,16 +284,21 @@ def _apply_pbr_material(obj: bpy.types.Object, texture_map: dict[str, str]) -> N
         links.new(bump.outputs["Color"], nmap.inputs["Color"])
         links.new(nmap.outputs["Normal"], bsdf.inputs["Normal"])
 
-    disp_tex = _add_tex("displacement", -600, -450)
-    if disp_tex:
-        disp = nodes.new("ShaderNodeDisplacement")
-        disp.location = (0, -400)
-        links.new(disp_tex.outputs["Color"], disp.inputs["Height"])
-        links.new(disp.outputs["Displacement"], out.inputs["Displacement"])
+    # Displacement is skipped: EEVEE does not support true geometry displacement.
+    # The texture is loaded here only so it appears in the node editor for reference.
+    _add_tex("displacement", -600, -450)
 
+    # Thickness texture used as a subtle SSS weight (scaled down to avoid wax look).
     thick = _add_tex("thickness", -600, 150)
     if thick:
-        links.new(thick.outputs["Color"], bsdf.inputs["Subsurface Weight"])
+        scale = nodes.new("ShaderNodeMath")
+        scale.operation = "MULTIPLY"
+        scale.inputs[1].default_value = 0.08
+        scale.location = (-300, 150)
+        links.new(thick.outputs["Color"], scale.inputs[0])
+        sss_input = bsdf.inputs.get("Subsurface Weight") or bsdf.inputs.get("Subsurface")
+        if sss_input is not None:
+            links.new(scale.outputs["Value"], sss_input)
 
     obj.data.materials.clear()
     obj.data.materials.append(mat)
@@ -516,3 +516,72 @@ def render_project(project: Project, output_path: Path) -> None:
     """Render all sequences in a Project."""
     for seq in project.sequences:
         render_sequence(seq, output_path / seq.output_path)
+
+
+def preview_sequence(seq: Sequence, save_path: str | None = None) -> None:
+    """Bake a Sequence as keyframes and optionally save the result as a .blend file.
+
+    When *save_path* is given the scene is saved headlessly and can be opened
+    separately in Blender's GUI.  The timeline spans all frames at the camera's fps.
+    Only the first camera is used as the active scene camera.
+    """
+    scene = bpy.context.scene
+    rig = seq.camhand_rig
+
+    t_start = max(
+        *(m.ts[0] for m in seq.cam_motions),
+        *(m.ts[0] for m in seq.hand_motions),
+    )
+    t_end = min(
+        *(m.ts[-1] for m in seq.cam_motions),
+        *(m.ts[-1] for m in seq.hand_motions),
+    )
+
+    _add_sun_light()
+    _setup_world_light(scene)
+
+    arm_objs: list[bpy.types.Object] = []
+    for hand in rig.hands:
+        arm_objs.append(_load_hand_model(hand.model))
+
+    camera = rig.cameras[0]
+    cam_motion = seq.cam_motions[0]
+
+    bpy_cam_data: bpy.types.Camera = bpy.data.cameras.new(name="preview_cam")
+    cam_obj: bpy.types.Object = bpy.data.objects.new("preview_cam", bpy_cam_data)
+    bpy.context.collection.objects.link(cam_obj)
+    _configure_render(scene, camera, cam_obj)
+    cam_obj.rotation_mode = "QUATERNION"
+
+    dt_ns = int(1e9 / camera.frequency)
+    timestamps = np.arange(t_start, t_end + 1, dt_ns, dtype=np.int64)
+    scene.render.fps = max(1, int(round(camera.frequency)))
+    scene.frame_start = 0
+    scene.frame_end = len(timestamps) - 1
+    scene.camera = cam_obj
+
+    for frame_idx, ts in enumerate(timestamps):
+        T_world_cam = cam_motion.get_pose(ts) * camera.T_b_c
+        mat = mathutils.Matrix(T_world_cam.as_matrix().tolist()) @ _OPENCV_TO_BLENDER_CAM
+        loc, rot, _ = mat.decompose()
+        cam_obj.location = loc
+        cam_obj.rotation_quaternion = rot
+        cam_obj.keyframe_insert(data_path="location", frame=frame_idx)
+        cam_obj.keyframe_insert(data_path="rotation_quaternion", frame=frame_idx)
+
+        for hand_motion, arm_obj in zip(seq.hand_motions, arm_objs, strict=True):
+            joint_poses = hand_motion.get_joint_poses(ts)
+            _set_hand_bones(arm_obj, hand_motion.joint_names, joint_poses)
+
+            arm_obj.keyframe_insert(data_path="location", frame=frame_idx)
+            arm_obj.keyframe_insert(data_path="rotation_quaternion", frame=frame_idx)
+
+            for pb in arm_obj.pose.bones:
+                pb.rotation_mode = "QUATERNION"
+                pb.rotation_quaternion = pb.matrix_basis.to_3x3().to_quaternion()
+                pb.keyframe_insert(data_path="rotation_quaternion", frame=frame_idx)
+
+    print(f"[phanesim] Preview ready: {len(timestamps)} frames at {scene.render.fps} fps.")
+    if save_path:
+        bpy.ops.wm.save_as_mainfile(filepath=save_path)
+        print(f"[phanesim] Saved: {save_path}")

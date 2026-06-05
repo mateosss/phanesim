@@ -191,6 +191,16 @@ The CLI will have the following commands:
 # Render can render either a sequence or a project (set of sequences)
 
 ./phanesim generate sequence sequence.json --output output_sequence_folder
+
+# Render PNG frames to disk (headless rendering)
+uv run phanesim generate sequence data/sequences/minimal/sequence.json --output output_folder
+
+# Open Blender GUI with animation baked on timeline (new)
+uv run phanesim preview sequence data/sequences/minimal/sequence.json
+# Save everytime render result preview
+uv run phanesim preview sequence data/sequences/minimal/sequence.json --output preview1.blend
+
+
 # generates the sequence: renders images and csv with groundtruth 2d joint positions
 
 ./phanesim generate project project.json --output output_project_folder
