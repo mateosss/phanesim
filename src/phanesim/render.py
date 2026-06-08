@@ -279,10 +279,10 @@ def _apply_pbr_material(obj: bpy.types.Object, texture_map: dict[str, str]) -> N
 
     bump = _add_tex("normal", -800, -200)
     if bump:
-        nmap = nodes.new("ShaderNodeNormalMap")
-        nmap.location = (-400, -200)
-        links.new(bump.outputs["Color"], nmap.inputs["Color"])
-        links.new(nmap.outputs["Normal"], bsdf.inputs["Normal"])
+        bump_node = nodes.new("ShaderNodeBump")
+        bump_node.location = (-400, -200)
+        links.new(bump.outputs["Color"], bump_node.inputs["Height"])
+        links.new(bump_node.outputs["Normal"], bsdf.inputs["Normal"])
 
     # Displacement is skipped: EEVEE does not support true geometry displacement.
     # The texture is loaded here only so it appears in the node editor for reference.
