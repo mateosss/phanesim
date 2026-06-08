@@ -10,8 +10,8 @@ __pycache__/
 venv/
 env/
 
-data/
-examples/minimal/output/
+data/finger_pose/
+data/wrist_elbow_pose
 output*/
 preview*
 
