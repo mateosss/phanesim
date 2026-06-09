@@ -21,6 +21,8 @@ jobs:
             command: ruff format --check .
           - name: Pyright
             command: pyright
+          - name: Pytest
+            command: pytest
 
     steps:
       - name: Checkout repository

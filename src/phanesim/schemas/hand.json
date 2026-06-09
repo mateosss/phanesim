@@ -1,24 +1,23 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "hand.json",
   "title": "Hand",
   "type": "object",
   "required": ["model"],
   "additionalProperties": false,
   "properties": {
-    "model": { "type": "string" },
-    "name": { "type": "string" },
-    "scale_length": { "type": "number", "exclusiveMinimum": 0 },
-    "scale_breadth": { "type": "number", "exclusiveMinimum": 0 },
-    "scale_thickness": { "type": "number", "exclusiveMinimum": 0 },
-    "texture": {
-      "oneOf": [{ "type": "null" }, { "type": "string" }]
-    },
+    "model": {"type": "string"},
+    "name": {"type": "string"},
+    "scale_length": {"type": "number", "exclusiveMinimum": 0},
+    "scale_breadth": {"type": "number", "exclusiveMinimum": 0},
+    "scale_thickness": {"type": "number", "exclusiveMinimum": 0},
+    "texture": {"oneOf": [{"type": "null"}, {"type": "string"}]},
     "color_multiply": {
       "oneOf": [
-        { "type": "null" },
+        {"type": "null"},
         {
           "type": "array",
-          "items": { "type": "number", "minimum": 0, "maximum": 1 },
+          "items": {"type": "number", "minimum": 0, "maximum": 1},
           "minItems": 3,
           "maxItems": 3
         }
