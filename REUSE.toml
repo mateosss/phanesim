@@ -1,0 +1,24 @@
+# SPDX-FileCopyrightText: 2026 Yutong Wan
+# SPDX-License-Identifier: BSD-3-Clause
+
+version = 1
+
+[[annotations]]
+path = ["data/hand.blend", "data/textures/**"]
+SPDX-FileCopyrightText = "Manuel Bastioni, MB-Lab contributors"
+SPDX-License-Identifier = "AGPL-3.0-only"
+
+[[annotations]]
+path = "data/sequences/minimal/**"
+SPDX-FileCopyrightText = "2026 Yutong Wan"
+SPDX-License-Identifier = "BSD-3-Clause"
+
+[[annotations]]
+path = "src/phanesim/schemas/**"
+SPDX-FileCopyrightText = "2026 Yutong Wan"
+SPDX-License-Identifier = "BSD-3-Clause"
+
+[[annotations]]
+path = ["main.blend", "pyrightconfig.json", "uv.lock"]
+SPDX-FileCopyrightText = "2026 Yutong Wan"
+SPDX-License-Identifier = "BSD-3-Clause"
