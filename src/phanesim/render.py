@@ -88,7 +88,6 @@ def project_point(p_cam: Vector3, model: CameraModel) -> tuple[float, float]:
 # ---------------------------------------------------------------------------
 
 
-
 def _set_hand_bones(arm_obj: bpy.types.Object, joint_names: list[str], joint_poses: list[Transform]) -> None:
     """Position the armature and apply wrist rotation from the CSV.
 
@@ -398,7 +397,8 @@ def _apply_sensor_noise(cam_dir: Path, n_frames: int, noise_std: float) -> None:
         px = np.array(img.pixels[:], dtype=np.float32).reshape(h, w, 4)
         px[:, :, :3] = np.clip(
             px[:, :, :3] + rng.normal(0.0, sigma, (h, w, 3)).astype(np.float32),
-            0.0, 1.0,
+            0.0,
+            1.0,
         )
         img.pixels = px.flatten().tolist()
         img.filepath_raw = str(fpath)
@@ -412,11 +412,11 @@ def _configure_render(scene: bpy.types.Scene, camera: Camera, cam_obj: bpy.types
     scene.render.engine = "BLENDER_EEVEE"
     scene.render.resolution_x, scene.render.resolution_y = camera.resolution
     scene.render.image_settings.file_format = "PNG"
-    scene.render.image_settings.color_depth = '8'
+    scene.render.image_settings.color_depth = "8"
     if getattr(camera, "pixel_format", "RGB24") == "MONO8":
-        scene.render.image_settings.color_mode = 'BW'
+        scene.render.image_settings.color_mode = "BW"
     else:
-        scene.render.image_settings.color_mode = 'RGB'
+        scene.render.image_settings.color_mode = "RGB"
     scene.camera = cam_obj
 
     # Set the Blender camera focal length to match the intrinsic fx parameter.
@@ -441,7 +441,6 @@ def _configure_render(scene: bpy.types.Scene, camera: Camera, cam_obj: bpy.types
         scene.eevee.use_gtao = False
     if hasattr(scene.eevee, "use_bloom"):
         scene.eevee.use_bloom = False
-
 
 
 def _joint_columns(seq: Sequence) -> list[str]:
