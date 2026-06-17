@@ -43,6 +43,7 @@ def _camera_from_dict(data: dict, base_dir: Path) -> Camera:
         lens_flare=bool(data.get("lens_flare", False)),
         chromatic_aberration=bool(data.get("chromatic_aberration", False)),
         motion_blur=bool(data.get("motion_blur", False)),
+        noise_std=float(data.get("noise_std", 0.0)),
     )
 
 
@@ -110,18 +111,21 @@ class Sequence:
     camhand_rig: CameraHandRig
     cam_motions: list[CameraMotion]  # len == len(camhand_rig.cameras)
     hand_motions: list[HandMotion]  # len == len(camhand_rig.hands)
+    hdri: Path | None = None  # absolute path to HDR/EXR environment map, or None
 
     @classmethod
     def from_dict(cls, data: dict, base_dir: Path) -> Sequence:
         camhand_rig = CameraHandRig.from_dict(data["camhand_rig"], base_dir)
         cam_motions = [CameraMotion.from_path(base_dir / p) for p in data["cam_motions"]]
         hand_motions = [HandMotion.from_path(base_dir / p) for p in data["hand_motions"]]
+        hdri = (base_dir / data["hdri"]) if data.get("hdri") else None
         return cls(
             name=str(data["name"]),
             output_path=Path(data["output_path"]),
             camhand_rig=camhand_rig,
             cam_motions=cam_motions,
             hand_motions=hand_motions,
+            hdri=hdri,
         )
 
     @classmethod

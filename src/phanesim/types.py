@@ -73,6 +73,7 @@ class Camera:
     lens_flare: bool = False
     chromatic_aberration: bool = False
     motion_blur: bool = False
+    noise_std: float = 0.0  # Gaussian sensor noise std-dev in 8-bit DN units (0 = disabled)
 
 
 @dataclass

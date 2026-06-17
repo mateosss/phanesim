@@ -21,8 +21,8 @@
         "intrinsics": {
           "name": "pinhole",
           "parameters": {
-            "fx": 1000.0,
-            "fy": 1000.0,
+            "fx": 240.0,
+            "fy": 240.0,
             "cx": 320.0,
             "cy": 240.0
           }
@@ -31,11 +31,12 @@
           640,
           480
         ],
-        "frequency": 30.0,
-        "pixel_format": "RGB24",
+        "frequency": 2.0,
+        "pixel_format": "MONO8",
         "shutter": "global",
         "exposure": 0,
-        "gain": 0
+        "gain": 0,
+        "noise_std": 5
       }
     ],
     "hands": [
@@ -67,5 +68,6 @@
   ],
   "hand_motions": [
     "hand_motion_pinch.csv"
-  ]
+  ],
+  "hdri": "../../hdri/brown_photostudio_02_2k.exr"
 }

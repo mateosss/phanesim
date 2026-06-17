@@ -9,6 +9,11 @@ SPDX-FileCopyrightText = "Manuel Bastioni, MB-Lab contributors"
 SPDX-License-Identifier = "AGPL-3.0-only"
 
 [[annotations]]
+path = "data/hdri/**"
+SPDX-FileCopyrightText = "Sergej Majboroda"
+SPDX-License-Identifier = "CC0-1.0"
+
+[[annotations]]
 path = "data/sequences/minimal/**"
 SPDX-FileCopyrightText = "2026 Yutong Wan"
 SPDX-License-Identifier = "BSD-3-Clause"

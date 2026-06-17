@@ -27,8 +27,8 @@
       "maxItems": 2
     },
     "frequency": {"type": "number", "exclusiveMinimum": 0},
-    "pixel_format": {"type": "string"},
-    "shutter": {"type": "string", "enum": ["global", "rolling"]},
+    "pixel_format": {"type": "string", "enum": ["RGB24", "MONO8"]},
+    "shutter": {"type": "string", "enum": ["global"]},
     "exposure": {"type": "integer"},
     "gain": {"type": "integer"},
     "vignette": {
@@ -44,6 +44,7 @@
     },
     "lens_flare": {"type": "boolean"},
     "chromatic_aberration": {"type": "boolean"},
-    "motion_blur": {"type": "boolean"}
+    "motion_blur": {"type": "boolean"},
+    "noise_std": {"type": "number", "minimum": 0}
   }
 }

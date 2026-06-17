@@ -18,6 +18,10 @@
       "type": "array",
       "items": {"type": "string"},
       "description": "Paths to hand motion CSVs, one per hand in camhand_rig order."
+    },
+    "hdri": {
+      "type": "string",
+      "description": "Path to an HDR/EXR environment map for world lighting. When omitted a simple sun lamp is used."
     }
   }
 }
