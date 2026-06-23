@@ -153,7 +153,9 @@ def generate(kind: str, input_path: Path, output_path: Path, blender_bin: str | 
         )
 
     blender = _find_blender(blender_bin)
-    # LIBGL_ALWAYS_SOFTWARE=1 is required for headless EEVEE on Linux/WSL.
+    # LIBGL_ALWAYS_SOFTWARE=1: EEVEE Next requires a display for GPU Vulkan context
+    # creation; no display is available in WSL2 headless mode. LLVMpipe (Mesa CPU
+    # renderer) provides a valid EGL surfaceless context without a display.
     env = {**os.environ, "LIBGL_ALWAYS_SOFTWARE": "1"}
     result = subprocess.run([blender, "--background", "--factory-startup", "--python-expr", expr], env=env)
     sys.exit(result.returncode)

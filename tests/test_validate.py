@@ -107,6 +107,40 @@ def test_validate_camera_with_null_vignette(tmp_path):
     validate_camera(_write(tmp_path, cam))
 
 
+def test_validate_camera_pixel_format_mono8(tmp_path):
+    cam = {**_CAMERA, "pixel_format": "MONO8"}
+    validate_camera(_write(tmp_path, cam))
+
+
+def test_validate_camera_invalid_pixel_format(tmp_path):
+    bad = {**_CAMERA, "pixel_format": "GRAY8"}
+    with pytest.raises(jsonschema.ValidationError):
+        validate_camera(_write(tmp_path, bad))
+
+
+def test_validate_camera_rolling_shutter_rejected(tmp_path):
+    # Schema was restricted to ["global"] only; rolling is no longer accepted.
+    bad = {**_CAMERA, "shutter": "rolling"}
+    with pytest.raises(jsonschema.ValidationError):
+        validate_camera(_write(tmp_path, bad))
+
+
+def test_validate_camera_noise_std_valid(tmp_path):
+    cam = {**_CAMERA, "noise_std": 5.0}
+    validate_camera(_write(tmp_path, cam))
+
+
+def test_validate_camera_noise_std_zero_valid(tmp_path):
+    cam = {**_CAMERA, "noise_std": 0.0}
+    validate_camera(_write(tmp_path, cam))
+
+
+def test_validate_camera_noise_std_negative_rejected(tmp_path):
+    bad = {**_CAMERA, "noise_std": -1.0}
+    with pytest.raises(jsonschema.ValidationError):
+        validate_camera(_write(tmp_path, bad))
+
+
 # ---------------------------------------------------------------------------
 # hand
 # ---------------------------------------------------------------------------
@@ -168,6 +202,11 @@ def test_validate_sequence_missing_name(tmp_path):
     bad = {k: v for k, v in _SEQUENCE.items() if k != "name"}
     with pytest.raises(jsonschema.ValidationError):
         validate_sequence(_write(tmp_path, bad))
+
+
+def test_validate_sequence_with_hdri(tmp_path):
+    seq = {**_SEQUENCE, "hdri": "scene.exr"}
+    validate_sequence(_write(tmp_path, seq))
 
 
 # ---------------------------------------------------------------------------
