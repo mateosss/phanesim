@@ -42,6 +42,50 @@ def test_camera_noise_std_zero_explicit(tmp_path):
     assert cam.noise_std == pytest.approx(0.0)
 
 
+def test_camera_chroma_noise_loaded(tmp_path):
+    cam = _camera_from_dict({**_BASE_CAMERA, "chroma_noise": 0.05}, tmp_path)
+    assert cam.chroma_noise == pytest.approx(0.05)
+
+
+def test_camera_chroma_noise_defaults_to_zero(tmp_path):
+    cam = _camera_from_dict(_BASE_CAMERA, tmp_path)
+    assert cam.chroma_noise == pytest.approx(0.0)
+
+
+# ---------------------------------------------------------------------------
+# Camera — compositor node parameters
+# ---------------------------------------------------------------------------
+
+
+def test_camera_compositor_params_loaded(tmp_path):
+    data = {
+        **_BASE_CAMERA,
+        "ca_factor": 0.5,
+        "distortion": 0.2,
+        "dispersion": 0.1,
+        "lens_scale": 1.3,
+        "vignette_factor": 0.8,
+        "vignette_feather": 0.6,
+    }
+    cam = _camera_from_dict(data, tmp_path)
+    assert cam.ca_factor == pytest.approx(0.5)
+    assert cam.distortion == pytest.approx(0.2)
+    assert cam.dispersion == pytest.approx(0.1)
+    assert cam.lens_scale == pytest.approx(1.3)
+    assert cam.vignette_factor == pytest.approx(0.8)
+    assert cam.vignette_feather == pytest.approx(0.6)
+
+
+def test_camera_compositor_params_defaults(tmp_path):
+    cam = _camera_from_dict(_BASE_CAMERA, tmp_path)
+    assert cam.ca_factor == pytest.approx(0.30)
+    assert cam.distortion == pytest.approx(0.387)
+    assert cam.dispersion == pytest.approx(0.0)
+    assert cam.lens_scale == pytest.approx(1.2)
+    assert cam.vignette_factor == pytest.approx(0.533)
+    assert cam.vignette_feather == pytest.approx(0.4)
+
+
 # ---------------------------------------------------------------------------
 # Camera — pixel_format and shutter
 # ---------------------------------------------------------------------------

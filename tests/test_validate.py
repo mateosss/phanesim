@@ -97,13 +97,27 @@ def test_validate_camera_extra_field_rejected(tmp_path):
         validate_camera(_write(tmp_path, bad))
 
 
-def test_validate_camera_with_vignette(tmp_path):
-    cam = {**_CAMERA, "vignette": {"path": "vignette.png"}}
+def test_validate_camera_compositor_params(tmp_path):
+    cam = {
+        **_CAMERA,
+        "ca_factor": 0.30,
+        "distortion": 0.387,
+        "dispersion": 0.0,
+        "lens_scale": 1.2,
+        "vignette_factor": 0.533,
+        "vignette_feather": 0.4,
+    }
     validate_camera(_write(tmp_path, cam))
 
 
-def test_validate_camera_with_null_vignette(tmp_path):
-    cam = {**_CAMERA, "vignette": None}
+def test_validate_camera_lens_scale_must_be_positive(tmp_path):
+    bad = {**_CAMERA, "lens_scale": 0.0}
+    with pytest.raises(jsonschema.ValidationError):
+        validate_camera(_write(tmp_path, bad))
+
+
+def test_validate_camera_distortion_can_be_negative(tmp_path):
+    cam = {**_CAMERA, "distortion": -0.3}
     validate_camera(_write(tmp_path, cam))
 
 
@@ -137,6 +151,17 @@ def test_validate_camera_noise_std_zero_valid(tmp_path):
 
 def test_validate_camera_noise_std_negative_rejected(tmp_path):
     bad = {**_CAMERA, "noise_std": -1.0}
+    with pytest.raises(jsonschema.ValidationError):
+        validate_camera(_write(tmp_path, bad))
+
+
+def test_validate_camera_chroma_noise_valid(tmp_path):
+    cam = {**_CAMERA, "chroma_noise": 0.05}
+    validate_camera(_write(tmp_path, cam))
+
+
+def test_validate_camera_chroma_noise_negative_rejected(tmp_path):
+    bad = {**_CAMERA, "chroma_noise": -0.1}
     with pytest.raises(jsonschema.ValidationError):
         validate_camera(_write(tmp_path, bad))
 

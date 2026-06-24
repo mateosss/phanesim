@@ -31,20 +31,14 @@
     "shutter": {"type": "string", "enum": ["global"]},
     "exposure": {"type": "integer"},
     "gain": {"type": "integer"},
-    "vignette": {
-      "oneOf": [
-        {"type": "null"},
-        {
-          "type": "object",
-          "required": ["path"],
-          "additionalProperties": false,
-          "properties": {"path": {"type": "string"}}
-        }
-      ]
-    },
-    "lens_flare": {"type": "boolean"},
-    "chromatic_aberration": {"type": "boolean"},
     "motion_blur": {"type": "boolean"},
-    "noise_std": {"type": "number", "minimum": 0}
+    "ca_factor": {"type": "number", "minimum": 0, "description": "Chromatic Aberration node Factor [0-1+]"},
+    "distortion": {"type": "number", "description": "Lens Distortion node Distortion [-1, 1]; negative = pincushion, positive = barrel"},
+    "dispersion": {"type": "number", "minimum": 0, "description": "Lens Distortion node Dispersion [0-1]"},
+    "lens_scale": {"type": "number", "exclusiveMinimum": 0, "description": "Transform Scale after distortion to crop black borders (e.g. 1.2)"},
+    "vignette_factor": {"type": "number", "minimum": 0, "description": "Vignette node Factor [0-1]"},
+    "vignette_feather": {"type": "number", "minimum": 0, "description": "Vignette node Feather [0-1]"},
+    "noise_std": {"type": "number", "minimum": 0, "description": "Sensor Noise node Luminance Noise [0-1+]; 0 disables the node"},
+    "chroma_noise": {"type": "number", "minimum": 0, "description": "Sensor Noise node Chroma Noise [0-1+]"}
   }
 }

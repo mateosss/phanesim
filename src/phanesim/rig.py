@@ -11,7 +11,7 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 
 from phanesim.motion import CameraMotion, HandMotion
-from phanesim.types import Camera, CameraModel, Color, Hand, Shutter, Transform, Vignette
+from phanesim.types import Camera, CameraModel, Color, Hand, Shutter, Transform
 
 
 def _transform_from_dict(data: dict) -> Transform:
@@ -22,9 +22,6 @@ def _transform_from_dict(data: dict) -> Transform:
 
 
 def _camera_from_dict(data: dict, base_dir: Path) -> Camera:
-    vignette: Vignette | None = None
-    if data.get("vignette") is not None:
-        vignette = Vignette(path=base_dir / data["vignette"]["path"])
     w, h = data["resolution"]
     return Camera(
         name=data.get("name"),
@@ -39,11 +36,15 @@ def _camera_from_dict(data: dict, base_dir: Path) -> Camera:
         shutter=Shutter(data["shutter"]),
         exposure=int(data["exposure"]),
         gain=int(data["gain"]),
-        vignette=vignette,
-        lens_flare=bool(data.get("lens_flare", False)),
-        chromatic_aberration=bool(data.get("chromatic_aberration", False)),
         motion_blur=bool(data.get("motion_blur", False)),
+        ca_factor=float(data.get("ca_factor", 0.30)),
+        distortion=float(data.get("distortion", 0.387)),
+        dispersion=float(data.get("dispersion", 0.0)),
+        lens_scale=float(data.get("lens_scale", 1.2)),
+        vignette_factor=float(data.get("vignette_factor", 0.533)),
+        vignette_feather=float(data.get("vignette_feather", 0.4)),
         noise_std=float(data.get("noise_std", 0.0)),
+        chroma_noise=float(data.get("chroma_noise", 0.0)),
     )
 
 

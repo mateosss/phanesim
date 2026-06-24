@@ -381,30 +381,155 @@ def _setup_world_hdri(scene: bpy.types.Scene, hdri_path: Path) -> None:
     scene.world = world
 
 
-def _apply_sensor_noise(cam_dir: Path, n_frames: int, noise_std: float) -> None:
-    """Add Gaussian sensor noise to rendered PNG frames in-place.
+def _load_compositor_effects() -> None:
+    """Append the Blender built-in compositor effect node groups if not yet loaded.
 
-    Each frame gets independently sampled noise (different seed per frame),
-    which is important for training-data diversity.  sigma = noise_std / 255
-    in the linear-float pixel domain so the scale matches 8-bit DN units.
+    Groups: 'Chromatic Aberration', 'Sensor Noise', 'Vignette'.
+    They live in compositing_nodes_essentials.blend shipped with every Blender install.
     """
-    rng = np.random.default_rng()
-    sigma = noise_std / 255.0
-    for frame_idx in range(n_frames):
-        fpath = cam_dir / f"frame_{frame_idx:06d}.png"
-        img = bpy.data.images.load(str(fpath))
-        w, h = img.size
-        px = np.array(img.pixels[:], dtype=np.float32).reshape(h, w, 4)
-        px[:, :, :3] = np.clip(
-            px[:, :, :3] + rng.normal(0.0, sigma, (h, w, 3)).astype(np.float32),
-            0.0,
-            1.0,
-        )
-        img.pixels = px.flatten().tolist()
-        img.filepath_raw = str(fpath)
-        img.file_format = "PNG"
-        img.save()
-        bpy.data.images.remove(img)
+    _EFFECTS = ("Chromatic Aberration", "Sensor Noise", "Vignette")
+    missing = [e for e in _EFFECTS if e not in bpy.data.node_groups]
+    if not missing:
+        return
+    major, minor = bpy.app.version[:2]
+    asset_blend = (
+        Path(bpy.app.binary_path).parent
+        / f"{major}.{minor}"
+        / "datafiles"
+        / "assets"
+        / "nodes"
+        / "compositing_nodes_essentials.blend"
+    )
+    if not asset_blend.exists():
+        return
+    with bpy.data.libraries.load(str(asset_blend), link=False) as (src, dst):
+        dst.node_groups = [e for e in missing if e in src.node_groups]
+
+
+def _setup_compositor(scene: bpy.types.Scene, camera: Camera) -> None:
+    """Build the compositor pipeline applied to every rendered frame.
+
+    Uses Blender 5.x built-in effect node groups (Chromatic Aberration, Sensor Noise,
+    Vignette) loaded from compositing_nodes_essentials.blend.  These are the same nodes
+    visible in the Compositor Add menu → Camera & Lens Effects / Creative.
+
+    Pipeline:
+      RenderLayers → ChromaticAberration → SensorNoise → BarrelDistortion
+      → Transform(1.2×) → Add(BlackMask, Transform) → [RGBtoBW]
+      → Vignette → Viewer + GroupOutput
+
+    noise_std / chroma_noise are read directly from camera and sequence and fed to the
+    Sensor Noise node (values in [0-1+] range, no unit conversion).
+    Open preview.blend → Compositor editor to adjust parameters interactively.
+    """
+    # Clean up previously created node group and black mask image.
+    if old_ng := bpy.data.node_groups.get("_phanesim_compositor"):
+        bpy.data.node_groups.remove(old_ng)
+    if old_img := bpy.data.images.get("_phanesim_black"):
+        bpy.data.images.remove(old_img)
+
+    _load_compositor_effects()
+
+    scene.render.use_compositing = True
+    tree = bpy.data.node_groups.new("_phanesim_compositor", "CompositorNodeTree")
+    tree.interface.new_socket("Image", in_out="OUTPUT", socket_type="NodeSocketColor")
+    scene.compositing_node_group = tree
+
+    W, H = camera.resolution
+    nodes = tree.nodes
+    links = tree.links
+
+    def _effect(name: str, loc: tuple) -> bpy.types.Node:
+        n = nodes.new("CompositorNodeGroup")
+        n.node_tree = bpy.data.node_groups.get(name)
+        n.location = loc
+        return n
+
+    # ── 1. Render Layers ────────────────────────────────────────────────────
+    rl = nodes.new("CompositorNodeRLayers")
+    rl.location = (-1400, 0)
+    rl.scene = scene
+    cur = rl.outputs["Image"]
+
+    # ── 2. Chromatic Aberration (built-in effect group) ──────────────────────
+    ca = _effect("Chromatic Aberration", (-1100, 0))
+    if ca.node_tree and "Factor" in ca.inputs:
+        ca.inputs["Factor"].default_value = camera.ca_factor
+    links.new(cur, ca.inputs["Image"])
+    cur = ca.outputs["Image"]
+
+    # ── 3. Sensor Noise (built-in effect group) ──────────────────────────────
+    # noise_std / chroma_noise map directly to the node's [0-1+] inputs.
+    if camera.noise_std > 0.0:
+        noise = _effect("Sensor Noise", (-800, 0))
+        if noise.node_tree:
+            noise.inputs["Luminance Noise"].default_value = camera.noise_std
+            noise.inputs["Chroma Noise"].default_value = camera.chroma_noise
+        links.new(cur, noise.inputs["Image"])
+        cur = noise.outputs["Image"]
+
+    # ── 4. Barrel Distortion (native node, no Fit — Transform handles crop) ──
+    ld = nodes.new("CompositorNodeLensdist")
+    ld.location = (-500, 0)
+    ld.inputs["Distortion"].default_value = camera.distortion
+    ld.inputs["Dispersion"].default_value = camera.dispersion
+    links.new(cur, ld.inputs["Image"])
+    cur = ld.outputs["Image"]
+
+    # ── 5. Transform: zoom in to crop the black borders ──────────────────────
+    tf = nodes.new("CompositorNodeTransform")
+    tf.location = (-200, 0)
+    tf.inputs["X"].default_value = 0.0
+    tf.inputs["Y"].default_value = 0.0
+    tf.inputs["Angle"].default_value = 0.0
+    tf.inputs["Scale"].default_value = camera.lens_scale
+    links.new(cur, tf.inputs["Image"])
+    tf_out = tf.outputs["Image"]
+
+    # ── 6. Black mask + Add: fill any remaining corner gaps with opaque black ─
+    # ShaderNodeMix(RGBA, ADD) replaces the removed CompositorNodeMixRGB.
+    # A = black image (fills gaps), B = transformed image; result = A + B.
+    black_img = bpy.data.images.new("_phanesim_black", W, H)
+    black_img.pixels = [0.0, 0.0, 0.0, 1.0] * (W * H)
+    black_node = nodes.new("CompositorNodeImage")
+    black_node.image = black_img
+    black_node.location = (-200, -300)
+
+    add = nodes.new("ShaderNodeMix")
+    add.data_type = "RGBA"
+    add.blend_type = "ADD"
+    add.clamp_factor = True
+    add.clamp_result = False
+    add.location = (100, 0)
+    add.inputs[0].default_value = 1.0  # Factor
+    links.new(black_node.outputs["Image"], add.inputs[6])  # A = black mask
+    links.new(tf_out, add.inputs[7])  # B = Transform
+    cur = add.outputs[2]  # Color result
+
+    # ── 7. RGB to BW (MONO8 cameras only) ───────────────────────────────────
+    if getattr(camera, "pixel_format", "RGB24") == "MONO8":
+        rgb2bw = nodes.new("CompositorNodeRGBToBW")
+        rgb2bw.location = (400, 0)
+        links.new(cur, rgb2bw.inputs["Image"])
+        cur = rgb2bw.outputs["Val"]
+
+    # ── 8. Vignette (built-in effect group) ──────────────────────────────────
+    vig = _effect("Vignette", (700, 0))
+    if vig.node_tree:
+        vig.inputs["Factor"].default_value = camera.vignette_factor
+        vig.inputs["Feather"].default_value = camera.vignette_feather
+    links.new(cur, vig.inputs["Image"])
+    cur = vig.outputs["Image"]
+
+    # ── 9. Viewer (interactive preview in Compositor viewport) ────────────────
+    viewer = nodes.new("CompositorNodeViewer")
+    viewer.location = (1000, -200)
+    links.new(cur, viewer.inputs["Image"])
+
+    # ── 10. Group Output → render pipeline receives the composited image ──────
+    ngo = nodes.new("NodeGroupOutput")
+    ngo.location = (1000, 0)
+    links.new(cur, ngo.inputs["Image"])
 
 
 def _configure_render(scene: bpy.types.Scene, camera: Camera, cam_obj: bpy.types.Object) -> None:
@@ -435,12 +560,13 @@ def _configure_render(scene: bpy.types.Scene, camera: Camera, cam_obj: bpy.types
     if getattr(camera, "motion_blur", False):
         scene.render.use_motion_blur = True
 
-    # Reduce EEVEE cost for CPU/software rendering (LIBGL_ALWAYS_SOFTWARE).
-    scene.eevee.taa_render_samples = 1
+    scene.eevee.taa_render_samples = 64
     if hasattr(scene.eevee, "use_gtao"):
         scene.eevee.use_gtao = False
     if hasattr(scene.eevee, "use_bloom"):
         scene.eevee.use_bloom = False
+
+    _setup_compositor(scene, camera)
 
 
 def _joint_columns(seq: Sequence) -> list[str]:
@@ -568,12 +694,9 @@ def render_sequence(seq: Sequence, output_path: Path) -> None:
             writer.writerows(joint_rows)
 
         # Pass 2: render all frames in a single call.
-        # '#' characters in filepath are replaced by the zero-padded frame number.
+        # '#' in the filepath is replaced by the zero-padded frame number.
         scene.render.filepath = str(cam_dir / "frame_######")
         bpy.ops.render.render(animation=True)
-
-        if camera.noise_std > 0:
-            _apply_sensor_noise(cam_dir, len(timestamps), camera.noise_std)
 
         bpy.data.objects.remove(cam_obj)
         bpy.data.cameras.remove(bpy_cam_data)
