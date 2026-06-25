@@ -26,28 +26,6 @@ type Quaternions = npt.NDArray[np.float32]  # shape (N, 4) xyzw
 
 
 @dataclass
-class Vignette:
-    """Radial light-falloff calibration for a camera.
-
-    Vignetting is the darkening of image corners/edges relative to the center
-    caused by the lens geometry.  It is represented here as a grayscale PNG
-    whose dimensions match the camera resolution.  Each pixel stores the
-    multiplicative attenuation at that screen position:
-
-        0.0 (black) = fully attenuated (no light reaches the sensor)
-        1.0 (white) = no attenuation (full brightness)
-
-    Typical vignette PNGs are brightest at the optical centre and fade
-    radially outward.  During rendering, Blender's compositor multiplies the
-    rendered image by this mask to simulate the falloff.
-
-    The path is resolved relative to the JSON config file that references it.
-    """
-
-    path: Path  # absolute path after resolution from the config file's directory
-
-
-@dataclass
 class CameraModel:
     name: str  # e.g. kb4, rt8, pinhole
     parameters: dict[str, float]  # e.g. for kb4: fx, fy, cx, cy, k1, k2, k3, k4
@@ -69,10 +47,16 @@ class Camera:
     shutter: Shutter
     exposure: int  # nanoseconds; 0=none, -1=auto
     gain: int  # 0=none, -1=auto
-    vignette: Vignette | None = None
-    lens_flare: bool = False
-    chromatic_aberration: bool = False
     motion_blur: bool = False
+    # Compositor node parameters — values match Blender node inputs directly
+    ca_factor: float = 0.30  # Chromatic Aberration → Factor
+    distortion: float = 0.387  # Lens Distortion → Distortion
+    dispersion: float = 0.0  # Lens Distortion → Dispersion
+    lens_scale: float = 1.2  # Transform → Scale (crops black borders after distortion)
+    vignette_factor: float = 0.533  # Vignette → Factor
+    vignette_feather: float = 0.4  # Vignette → Feather
+    noise_std: float = 0.0  # Sensor Noise → Luminance Noise (0 = node disabled)
+    chroma_noise: float = 0.0  # Sensor Noise → Chroma Noise
 
 
 @dataclass

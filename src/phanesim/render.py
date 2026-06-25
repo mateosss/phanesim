@@ -37,7 +37,7 @@ import mathutils  # pyright: ignore[reportMissingImports]
 import numpy as np
 
 from phanesim.rig import Project, Sequence
-from phanesim.types import Camera, CameraModel, Transform, Vector3
+from phanesim.types import Camera, CameraModel, Shutter, Transform, Vector3
 
 # 180° rotation around X: converts OpenCV camera frame to Blender camera frame.
 _OPENCV_TO_BLENDER_CAM = mathutils.Matrix.Rotation(math.pi, 4, "X")
@@ -86,11 +86,6 @@ def project_point(p_cam: Vector3, model: CameraModel) -> tuple[float, float]:
 # ---------------------------------------------------------------------------
 # Blender scene helpers
 # ---------------------------------------------------------------------------
-
-
-def _set_camera(cam_obj: bpy.types.Object, T_world_cam: Transform) -> None:
-    """Position a Blender camera object using a world-frame Transform."""
-    cam_obj.matrix_world = mathutils.Matrix(T_world_cam.as_matrix().tolist()) @ _OPENCV_TO_BLENDER_CAM
 
 
 def _set_hand_bones(arm_obj: bpy.types.Object, joint_names: list[str], joint_poses: list[Transform]) -> None:
@@ -235,7 +230,7 @@ def _apply_pbr_material(obj: bpy.types.Object, texture_map: dict[str, str]) -> N
     links.new(bsdf.outputs["BSDF"], out.inputs["Surface"])
 
     # -----------------------------------------------------------------------
-    # NEW: Set Matte Skin Default Values
+    # Set Matte Skin Default Values
     # These apply if textures are missing or act as a base for blending.
     # -----------------------------------------------------------------------
 
@@ -359,11 +354,194 @@ def _setup_world_light(scene: bpy.types.Scene) -> None:
     scene.world = world
 
 
+def _setup_world_hdri(scene: bpy.types.Scene, hdri_path: Path) -> None:
+    """Set the world background to an HDR/EXR environment map.
+
+    The HDRI provides both the visible background and the scene lighting, so
+    no additional sun lamp is needed when this is used.
+    """
+    world = bpy.data.worlds.new("_phanesim_world")
+    world.use_nodes = True
+    nodes = world.node_tree.nodes
+    links = world.node_tree.links
+    nodes.clear()
+
+    tex = nodes.new("ShaderNodeTexEnvironment")
+    tex.image = bpy.data.images.load(str(hdri_path))
+    tex.location = (-300, 0)
+
+    bg = nodes.new("ShaderNodeBackground")
+    bg.location = (0, 0)
+
+    out = nodes.new("ShaderNodeOutputWorld")
+    out.location = (300, 0)
+
+    links.new(tex.outputs["Color"], bg.inputs["Color"])
+    links.new(bg.outputs["Background"], out.inputs["Surface"])
+    scene.world = world
+
+
+def _load_compositor_effects() -> None:
+    """Append the Blender built-in compositor effect node groups if not yet loaded.
+
+    Groups: 'Chromatic Aberration', 'Sensor Noise', 'Vignette'.
+    They live in compositing_nodes_essentials.blend shipped with every Blender install.
+    """
+    _EFFECTS = ("Chromatic Aberration", "Sensor Noise", "Vignette")
+    missing = [e for e in _EFFECTS if e not in bpy.data.node_groups]
+    if not missing:
+        return
+    major, minor = bpy.app.version[:2]
+    asset_blend = (
+        Path(bpy.app.binary_path).parent
+        / f"{major}.{minor}"
+        / "datafiles"
+        / "assets"
+        / "nodes"
+        / "compositing_nodes_essentials.blend"
+    )
+    if not asset_blend.exists():
+        return
+    with bpy.data.libraries.load(str(asset_blend), link=False) as (src, dst):
+        dst.node_groups = [e for e in missing if e in src.node_groups]
+
+
+def _setup_compositor(scene: bpy.types.Scene, camera: Camera) -> None:
+    """Build the compositor pipeline applied to every rendered frame.
+
+    Uses Blender 5.x built-in effect node groups (Chromatic Aberration, Sensor Noise,
+    Vignette) loaded from compositing_nodes_essentials.blend.  These are the same nodes
+    visible in the Compositor Add menu → Camera & Lens Effects / Creative.
+
+    Pipeline:
+      RenderLayers → ChromaticAberration → SensorNoise → BarrelDistortion
+      → Transform(1.2×) → Add(BlackMask, Transform) → [RGBtoBW]
+      → Vignette → Viewer + GroupOutput
+
+    noise_std / chroma_noise are read directly from camera and sequence and fed to the
+    Sensor Noise node (values in [0-1+] range, no unit conversion).
+    Open preview.blend → Compositor editor to adjust parameters interactively.
+    """
+    # Clean up previously created node group and black mask image.
+    if old_ng := bpy.data.node_groups.get("_phanesim_compositor"):
+        bpy.data.node_groups.remove(old_ng)
+    if old_img := bpy.data.images.get("_phanesim_black"):
+        bpy.data.images.remove(old_img)
+
+    _load_compositor_effects()
+
+    scene.render.use_compositing = True
+    tree = bpy.data.node_groups.new("_phanesim_compositor", "CompositorNodeTree")
+    tree.interface.new_socket("Image", in_out="OUTPUT", socket_type="NodeSocketColor")
+    scene.compositing_node_group = tree
+
+    W, H = camera.resolution
+    nodes = tree.nodes
+    links = tree.links
+
+    def _effect(name: str, loc: tuple) -> bpy.types.Node:
+        n = nodes.new("CompositorNodeGroup")
+        n.node_tree = bpy.data.node_groups.get(name)
+        n.location = loc
+        return n
+
+    # ── 1. Render Layers ────────────────────────────────────────────────────
+    rl = nodes.new("CompositorNodeRLayers")
+    rl.location = (-1400, 0)
+    rl.scene = scene
+    cur = rl.outputs["Image"]
+
+    # ── 2. Chromatic Aberration (built-in effect group) ──────────────────────
+    ca = _effect("Chromatic Aberration", (-1100, 0))
+    if ca.node_tree and "Factor" in ca.inputs:
+        ca.inputs["Factor"].default_value = camera.ca_factor
+    links.new(cur, ca.inputs["Image"])
+    cur = ca.outputs["Image"]
+
+    # ── 3. Sensor Noise (built-in effect group) ──────────────────────────────
+    # noise_std / chroma_noise map directly to the node's [0-1+] inputs.
+    if camera.noise_std > 0.0:
+        noise = _effect("Sensor Noise", (-800, 0))
+        if noise.node_tree:
+            noise.inputs["Luminance Noise"].default_value = camera.noise_std
+            noise.inputs["Chroma Noise"].default_value = camera.chroma_noise
+        links.new(cur, noise.inputs["Image"])
+        cur = noise.outputs["Image"]
+
+    # ── 4. Barrel Distortion (native node, no Fit — Transform handles crop) ──
+    ld = nodes.new("CompositorNodeLensdist")
+    ld.location = (-500, 0)
+    ld.inputs["Distortion"].default_value = camera.distortion
+    ld.inputs["Dispersion"].default_value = camera.dispersion
+    links.new(cur, ld.inputs["Image"])
+    cur = ld.outputs["Image"]
+
+    # ── 5. Transform: zoom in to crop the black borders ──────────────────────
+    tf = nodes.new("CompositorNodeTransform")
+    tf.location = (-200, 0)
+    tf.inputs["X"].default_value = 0.0
+    tf.inputs["Y"].default_value = 0.0
+    tf.inputs["Angle"].default_value = 0.0
+    tf.inputs["Scale"].default_value = camera.lens_scale
+    links.new(cur, tf.inputs["Image"])
+    tf_out = tf.outputs["Image"]
+
+    # ── 6. Black mask + Add: fill any remaining corner gaps with opaque black ─
+    # ShaderNodeMix(RGBA, ADD) replaces the removed CompositorNodeMixRGB.
+    # A = black image (fills gaps), B = transformed image; result = A + B.
+    black_img = bpy.data.images.new("_phanesim_black", W, H)
+    black_img.pixels = [0.0, 0.0, 0.0, 1.0] * (W * H)
+    black_node = nodes.new("CompositorNodeImage")
+    black_node.image = black_img
+    black_node.location = (-200, -300)
+
+    add = nodes.new("ShaderNodeMix")
+    add.data_type = "RGBA"
+    add.blend_type = "ADD"
+    add.clamp_factor = True
+    add.clamp_result = False
+    add.location = (100, 0)
+    add.inputs[0].default_value = 1.0  # Factor
+    links.new(black_node.outputs["Image"], add.inputs[6])  # A = black mask
+    links.new(tf_out, add.inputs[7])  # B = Transform
+    cur = add.outputs[2]  # Color result
+
+    # ── 7. RGB to BW (MONO8 cameras only) ───────────────────────────────────
+    if getattr(camera, "pixel_format", "RGB24") == "MONO8":
+        rgb2bw = nodes.new("CompositorNodeRGBToBW")
+        rgb2bw.location = (400, 0)
+        links.new(cur, rgb2bw.inputs["Image"])
+        cur = rgb2bw.outputs["Val"]
+
+    # ── 8. Vignette (built-in effect group) ──────────────────────────────────
+    vig = _effect("Vignette", (700, 0))
+    if vig.node_tree:
+        vig.inputs["Factor"].default_value = camera.vignette_factor
+        vig.inputs["Feather"].default_value = camera.vignette_feather
+    links.new(cur, vig.inputs["Image"])
+    cur = vig.outputs["Image"]
+
+    # ── 9. Viewer (interactive preview in Compositor viewport) ────────────────
+    viewer = nodes.new("CompositorNodeViewer")
+    viewer.location = (1000, -200)
+    links.new(cur, viewer.inputs["Image"])
+
+    # ── 10. Group Output → render pipeline receives the composited image ──────
+    ngo = nodes.new("NodeGroupOutput")
+    ngo.location = (1000, 0)
+    links.new(cur, ngo.inputs["Image"])
+
+
 def _configure_render(scene: bpy.types.Scene, camera: Camera, cam_obj: bpy.types.Object) -> None:
     """Apply camera properties to the Blender scene render settings."""
     scene.render.engine = "BLENDER_EEVEE"
     scene.render.resolution_x, scene.render.resolution_y = camera.resolution
     scene.render.image_settings.file_format = "PNG"
+    scene.render.image_settings.color_depth = "8"
+    if getattr(camera, "pixel_format", "RGB24") == "MONO8":
+        scene.render.image_settings.color_mode = "BW"
+    else:
+        scene.render.image_settings.color_mode = "RGB"
     scene.camera = cam_obj
 
     # Set the Blender camera focal length to match the intrinsic fx parameter.
@@ -377,20 +555,18 @@ def _configure_render(scene: bpy.types.Scene, camera: Camera, cam_obj: bpy.types
     bpy_cam.clip_start = 0.01
     bpy_cam.clip_end = 200.0
 
+    if camera.shutter != Shutter.GLOBAL:
+        raise NotImplementedError("Only global shutter is supported in this version.")
     if getattr(camera, "motion_blur", False):
         scene.render.use_motion_blur = True
-    if getattr(camera, "shutter", None) == "rolling":
-        scene.render.use_motion_blur = True
 
+    scene.eevee.taa_render_samples = 64
+    if hasattr(scene.eevee, "use_gtao"):
+        scene.eevee.use_gtao = False
+    if hasattr(scene.eevee, "use_bloom"):
+        scene.eevee.use_bloom = False
 
-# ---------------------------------------------------------------------------
-# Frame-level rendering
-# ---------------------------------------------------------------------------
-
-
-def _render_frame(scene: bpy.types.Scene, output_file: Path) -> None:
-    scene.render.filepath = str(output_file)
-    bpy.ops.render.render(write_still=True)
+    _setup_compositor(scene, camera)
 
 
 def _joint_columns(seq: Sequence) -> list[str]:
@@ -413,6 +589,13 @@ def _joint_columns(seq: Sequence) -> list[str]:
 def render_sequence(seq: Sequence, output_path: Path) -> None:
     """Render all frames of a Sequence and write images + ground-truth CSVs.
 
+    Scene setup (lighting, hand models) happens once.  For each camera the
+    pipeline has two passes:
+      Pass 1 — bake keyframes for the camera and all hand bones, and collect
+               2D joint projections into memory.
+      Pass 2 — render the full animation in a single bpy.ops call so Blender's
+               render engine is initialised only once per camera.
+
     Args:
         seq:         Loaded Sequence object.
         output_path: Root output directory for this sequence.
@@ -430,9 +613,15 @@ def render_sequence(seq: Sequence, output_path: Path) -> None:
         *(m.ts[-1] for m in seq.hand_motions),
     )
 
-    # Add lighting; factory-startup gives an empty scene with no lights.
-    sun_obj, sun_data = _add_sun_light()
-    _setup_world_light(scene)
+    # Add lighting once. HDRI provides full scene lighting on its own; the
+    # sun lamp is only added when no HDRI is configured.
+    sun_obj: bpy.types.Object | None = None
+    sun_data: bpy.types.Light | None = None
+    if seq.hdri:
+        _setup_world_hdri(scene, seq.hdri)
+    else:
+        sun_obj, sun_data = _add_sun_light()
+        _setup_world_light(scene)
 
     # Load hand models once; keep reference for bone posing.
     arm_objs: list[bpy.types.Object] = []
@@ -446,70 +635,79 @@ def render_sequence(seq: Sequence, output_path: Path) -> None:
         cam_dir = output_path / f"cam_{cam_label}"
         cam_dir.mkdir(parents=True, exist_ok=True)
 
-        # Create a Blender camera object for this camera.
         bpy_cam_data: bpy.types.Camera = bpy.data.cameras.new(name=cam_label)
         cam_obj: bpy.types.Object = bpy.data.objects.new(cam_label, bpy_cam_data)
         bpy.context.collection.objects.link(cam_obj)
         _configure_render(scene, camera, cam_obj)
+        cam_obj.rotation_mode = "QUATERNION"
 
-        # Build frame timestamps at this camera's frequency.
         dt_ns = int(1e9 / camera.frequency)
         timestamps = np.arange(t_start, t_end + 1, dt_ns, dtype=np.int64)
+        scene.frame_start = 0
+        scene.frame_end = len(timestamps) - 1
+        scene.render.fps = max(1, int(round(camera.frequency)))
 
+        # Pass 1: bake keyframes for camera + hands; collect 2D joint projections.
+        joint_rows: list[list[object]] = []
+        for frame_idx, ts in enumerate(timestamps):
+            T_world_body = cam_motion.get_pose(ts)
+            T_world_cam = T_world_body * camera.T_b_c
+            T_cam_world = T_world_cam.inv()
+
+            mat = mathutils.Matrix(T_world_cam.as_matrix().tolist()) @ _OPENCV_TO_BLENDER_CAM
+            loc, rot, _ = mat.decompose()
+            cam_obj.location = loc
+            cam_obj.rotation_quaternion = rot
+            cam_obj.keyframe_insert(data_path="location", frame=frame_idx)
+            cam_obj.keyframe_insert(data_path="rotation_quaternion", frame=frame_idx)
+
+            row: list[object] = [int(ts)]
+            for h, (hand_motion, arm_obj) in enumerate(zip(seq.hand_motions, arm_objs, strict=True)):
+                joint_poses = hand_motion.get_joint_poses(ts)
+                _set_hand_bones(arm_obj, hand_motion.joint_names, joint_poses)
+                bpy.context.view_layer.update()
+
+                arm_obj.keyframe_insert(data_path="location", frame=frame_idx)
+                arm_obj.keyframe_insert(data_path="rotation_quaternion", frame=frame_idx)
+                for pb in arm_obj.pose.bones:
+                    pb.rotation_mode = "QUATERNION"
+                    pb.rotation_quaternion = pb.matrix_basis.to_3x3().to_quaternion()
+                    pb.keyframe_insert(data_path="rotation_quaternion", frame=frame_idx)
+
+                T_c_h = rig.T_c_h[c][h]
+                T_cam_hand = T_cam_world * T_c_h
+                for joint_pose in joint_poses:
+                    p_world = joint_pose.translation
+                    p_cam = T_cam_hand.apply(p_world)
+                    if p_cam[2] > 0:
+                        u, v = project_point(p_cam, camera.intrinsics)
+                    else:
+                        u, v = float("nan"), float("nan")
+                    row.extend([u, v])
+            joint_rows.append(row)
+
+        # Write joints CSV.
         csv_path = cam_dir / "joints_2d.csv"
         with csv_path.open("w", newline="") as csv_file:
             writer = csv.writer(csv_file)
             writer.writerow(["timestamp"] + joint_cols)
+            writer.writerows(joint_rows)
 
-            for frame_idx, ts in enumerate(timestamps):
-                # Position the camera.
-                T_world_body = cam_motion.get_pose(ts)
-                T_b_c = camera.T_b_c
-                T_world_cam = T_world_body * T_b_c
-                _set_camera(cam_obj, T_world_cam)
+        # Pass 2: render all frames in a single call.
+        # '#' in the filepath is replaced by the zero-padded frame number.
+        scene.render.filepath = str(cam_dir / "frame_######")
+        bpy.ops.render.render(animation=True)
 
-                # Position hand bones and collect 2D projections.
-                row: list[object] = [int(ts)]
-                T_cam_world = T_world_cam.inv()
-
-                for h, (hand_motion, arm_obj) in enumerate(zip(seq.hand_motions, arm_objs, strict=True)):
-                    joint_poses = hand_motion.get_joint_poses(ts)
-
-                    # Pose the armature via Python API (no mode switching needed).
-                    _set_hand_bones(arm_obj, hand_motion.joint_names, joint_poses)
-                    bpy.context.view_layer.update()
-
-                    # T_c_h[c][h]: transform from hand frame to camera frame.
-                    # Joint poses from the CSV are in world frame, so we compose:
-                    # p_cam = T_cam_world * T_world_hand * p_joint_local
-                    # With T_c_h = identity (default) this reduces to T_cam_world.
-                    T_c_h = rig.T_c_h[c][h]
-                    T_cam_hand = T_cam_world * T_c_h
-
-                    # Project each joint to image coordinates.
-                    for joint_pose in joint_poses:
-                        p_world = joint_pose.translation
-                        p_cam = T_cam_hand.apply(p_world)
-                        if p_cam[2] > 0:
-                            u, v = project_point(p_cam, camera.intrinsics)
-                        else:
-                            u, v = float("nan"), float("nan")
-                        row.extend([u, v])
-
-                # Render and save frame image.
-                frame_file = cam_dir / f"frame_{frame_idx:06d}.png"
-                _render_frame(scene, frame_file)
-                writer.writerow(row)
-
-        # Clean up camera object after rendering this camera's frames.
         bpy.data.objects.remove(cam_obj)
         bpy.data.cameras.remove(bpy_cam_data)
 
-    # Clean up imported hand models and the sun light.
+    # Clean up imported hand models and (if added) the sun light.
     for arm_obj in arm_objs:
         bpy.data.objects.remove(arm_obj, do_unlink=True)
-    bpy.data.objects.remove(sun_obj, do_unlink=True)
-    bpy.data.lights.remove(sun_data)
+    if sun_obj is not None:
+        bpy.data.objects.remove(sun_obj, do_unlink=True)
+    if sun_data is not None:
+        bpy.data.lights.remove(sun_data)
 
 
 def render_project(project: Project, output_path: Path) -> None:
@@ -537,8 +735,11 @@ def preview_sequence(seq: Sequence, save_path: str | None = None) -> None:
         *(m.ts[-1] for m in seq.hand_motions),
     )
 
-    _add_sun_light()
-    _setup_world_light(scene)
+    if seq.hdri:
+        _setup_world_hdri(scene, seq.hdri)
+    else:
+        _add_sun_light()
+        _setup_world_light(scene)
 
     arm_objs: list[bpy.types.Object] = []
     for hand in rig.hands:

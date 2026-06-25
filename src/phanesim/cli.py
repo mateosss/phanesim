@@ -153,7 +153,9 @@ def generate(kind: str, input_path: Path, output_path: Path, blender_bin: str | 
         )
 
     blender = _find_blender(blender_bin)
-    # LIBGL_ALWAYS_SOFTWARE=1 is required for headless EEVEE on Linux/WSL.
+    # LIBGL_ALWAYS_SOFTWARE=1: EEVEE Next requires a display for GPU Vulkan context
+    # creation; no display is available in WSL2 headless mode. LLVMpipe (Mesa CPU
+    # renderer) provides a valid EGL surfaceless context without a display.
     env = {**os.environ, "LIBGL_ALWAYS_SOFTWARE": "1"}
     result = subprocess.run([blender, "--background", "--factory-startup", "--python-expr", expr], env=env)
     sys.exit(result.returncode)
@@ -179,11 +181,11 @@ def generate(kind: str, input_path: Path, output_path: Path, blender_bin: str | 
     help="Path to the Blender executable (default: 'blender' on PATH).",
 )
 def preview(kind: str, input_path: Path, output_blend: Path, blender_bin: str | None) -> None:
-    """Bake a sequence as keyframes and open the result in Blender's GUI.
+    """Bake a sequence as keyframes and save the result as a .blend file.
 
-    Step 1 runs Blender headlessly to bake the animation and save a .blend file.
-    Step 2 opens that file in the GUI so you can scrub the timeline interactively.
-    Separating the steps avoids WSL2 Wayland/EGL crashes during script execution.
+    Runs Blender headlessly to bake the animation, then prints the path to the
+    saved .blend file.  Open it manually in Blender to scrub the timeline and
+    inspect the compositor nodes interactively.
     Set BLENDER_BIN or pass --blender to specify the executable.
     """
     input_abs = str(input_path.resolve())
@@ -201,26 +203,15 @@ def preview(kind: str, input_path: Path, output_blend: Path, blender_bin: str | 
     blender = _find_blender(blender_bin)
     headless_env = {**os.environ, "LIBGL_ALWAYS_SOFTWARE": "1"}
 
-    # Step 1: bake keyframes headlessly and save the .blend file.
-    click.echo("Step 1/2: baking keyframes (headless)...")
-    r1 = subprocess.run(
+    click.echo("Baking keyframes (headless)...")
+    r = subprocess.run(
         [blender, "--background", "--factory-startup", "--python-expr", expr],
         env=headless_env,
     )
-    if r1.returncode != 0:
-        sys.exit(r1.returncode)
+    if r.returncode != 0:
+        sys.exit(r.returncode)
 
-    # Step 2: open the .blend file using the Windows default app via explorer.exe.
-    # The Linux Blender GUI crashes in WSL2 (no GPU/EGL), but explorer.exe hands
-    # the file to Windows Blender which has full GPU access.
-    win_path_result = subprocess.run(["wslpath", "-w", blend_out], capture_output=True, text=True)
-    if win_path_result.returncode == 0:
-        win_path = win_path_result.stdout.strip()
-        click.echo(f"Step 2/2: opening {win_path} in Windows Blender...")
-        subprocess.run(["explorer.exe", win_path])
-    else:
-        click.echo(f"Preview saved to: {blend_out}")
-        click.echo("Open this file in Blender to preview the animation.")
+    click.echo(f"Preview saved: {blend_out}")
 
 
 def main() -> None:

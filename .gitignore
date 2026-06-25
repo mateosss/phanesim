@@ -10,8 +10,6 @@ __pycache__/
 venv/
 env/
 
-data/finger_pose/
-data/wrist_elbow_pose/
 output*/
 preview*
 

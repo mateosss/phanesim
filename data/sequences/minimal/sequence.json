@@ -6,36 +6,32 @@
       {
         "name": "cam0",
         "T_b_c": {
-          "pos": [
-            0.0,
-            0.0,
-            0.0
-          ],
-          "quat": [
-            0.0,
-            0.0,
-            0.0,
-            1.0
-          ]
+          "pos": [0.0, 0.0, 0.0],
+          "quat": [0.0, 0.0, 0.0, 1.0]
         },
         "intrinsics": {
           "name": "pinhole",
           "parameters": {
-            "fx": 1000.0,
-            "fy": 1000.0,
+            "fx": 240.0,
+            "fy": 240.0,
             "cx": 320.0,
             "cy": 240.0
           }
         },
-        "resolution": [
-          640,
-          480
-        ],
-        "frequency": 30.0,
-        "pixel_format": "RGB24",
+        "resolution": [640, 480],
+        "frequency": 2.0,
+        "pixel_format": "MONO8",
         "shutter": "global",
         "exposure": 0,
-        "gain": 0
+        "gain": 0,
+        "ca_factor": 0.30,
+        "distortion": 0.387,
+        "dispersion": 0.0,
+        "lens_scale": 1.2,
+        "vignette_factor": 0.533,
+        "vignette_feather": 0.4,
+        "noise_std": 0.318,
+        "chroma_noise": 0.050
       }
     ],
     "hands": [
@@ -47,25 +43,13 @@
     "T_c_h": [
       [
         {
-          "pos": [
-            0.0,
-            0.0,
-            0.0
-          ],
-          "quat": [
-            0.0,
-            0.0,
-            0.0,
-            1.0
-          ]
+          "pos": [0.0, 0.0, 0.0],
+          "quat": [0.0, 0.0, 0.0, 1.0]
         }
       ]
     ]
   },
-  "cam_motions": [
-    "cam_motion.csv"
-  ],
-  "hand_motions": [
-    "hand_motion.csv"
-  ]
+  "cam_motions": ["cam_motion.csv"],
+  "hand_motions": ["hand_motion.csv"],
+  "hdri": "../../hdri/brown_photostudio_02_2k.exr"
 }
