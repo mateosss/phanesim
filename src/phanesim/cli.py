@@ -92,7 +92,7 @@ def _overlay_keypoints(output_path: Path) -> None:
         n_hands = max(1, len(uv_pairs) // 21)
 
         frame_paths = sorted(cam_dir.glob("frame_??????.png"))
-        for frame_path, row in zip(frame_paths, rows):
+        for frame_path, row in zip(frame_paths, rows, strict=False):
             img = Image.open(frame_path).convert("RGB")
             draw = ImageDraw.Draw(img)
 
@@ -110,9 +110,9 @@ def _overlay_keypoints(output_path: Path) -> None:
 
                 # Draw skeleton lines first (underneath dots).
                 for a, b in HAND_CONNECTIONS:
-                    if hand_uv[a] is not None and hand_uv[b] is not None:
-                        color = LANDMARK_COLORS[a]
-                        draw.line([hand_uv[a], hand_uv[b]], fill=color, width=_LINE_WIDTH)
+                    pt_a, pt_b = hand_uv[a], hand_uv[b]
+                    if pt_a is not None and pt_b is not None:
+                        draw.line([pt_a, pt_b], fill=LANDMARK_COLORS[a], width=_LINE_WIDTH)
 
                 # Draw dots on top.
                 for k, pt in enumerate(hand_uv):

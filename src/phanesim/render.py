@@ -37,6 +37,7 @@ import mathutils  # pyright: ignore[reportMissingImports]
 import numpy as np
 
 from phanesim.rig import Project, Sequence
+from phanesim.skeleton import HAND_CONNECTIONS, HAND_LANDMARKS, LANDMARK_COLORS  # noqa: F401
 from phanesim.types import Camera, CameraModel, Shutter, Transform, Vector3
 
 # 180° rotation around X: converts OpenCV camera frame to Blender camera frame.
@@ -568,8 +569,6 @@ def _configure_render(scene: bpy.types.Scene, camera: Camera, cam_obj: bpy.types
 
     _setup_compositor(scene, camera)
 
-
-from phanesim.skeleton import HAND_CONNECTIONS, HAND_LANDMARKS, LANDMARK_COLORS  # noqa: F401
 
 _HAND_LANDMARKS = HAND_LANDMARKS
 
