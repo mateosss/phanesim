@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import csv
+import math
 import os
 import subprocess
 import sys
@@ -10,8 +12,10 @@ from pathlib import Path
 
 import click
 import jsonschema
+from PIL import Image, ImageDraw
 
 import phanesim.validate as val
+from phanesim.skeleton import HAND_CONNECTIONS, LANDMARK_COLORS
 
 # Parent directory of the phanesim package, added to sys.path inside Blender
 # so that `import phanesim` works in the headless rendering subprocess.
@@ -62,6 +66,67 @@ def _find_blender(blender_bin: str | None) -> str:
         pass
 
     return "blender"
+
+
+def _overlay_keypoints(output_path: Path) -> None:
+    """Draw the 21-landmark skeleton on every rendered frame found under output_path.
+
+    Reads each cam_*/joints_2d.csv, loads the matching frame_XXXXXX.png files, draws
+    per-finger colored dots and skeleton lines, and saves frame_XXXXXX_debug.png.
+    """
+    _DOT_RADIUS = 3
+    _LINE_WIDTH = 1
+
+    for csv_path in sorted(output_path.rglob("joints_2d.csv")):
+        cam_dir = csv_path.parent
+        with csv_path.open(newline="") as f:
+            rows = list(csv.DictReader(f))
+        if not rows:
+            continue
+
+        # Column pairs: (u_col, v_col) for each of the 21 landmarks per hand.
+        headers = list(rows[0].keys())  # timestamp + u/v pairs
+        uv_pairs = [(headers[i], headers[i + 1]) for i in range(1, len(headers) - 1, 2)]
+
+        # uv_pairs has 21 pairs per hand; derive hand count from total columns.
+        n_hands = max(1, len(uv_pairs) // 21)
+
+        frame_paths = sorted(cam_dir.glob("frame_??????.png"))
+        for frame_path, row in zip(frame_paths, rows):
+            img = Image.open(frame_path).convert("RGB")
+            draw = ImageDraw.Draw(img)
+
+            for hand_idx in range(n_hands):
+                offset = hand_idx * 21
+                hand_uv: list[tuple[float, float] | None] = []
+
+                for k in range(21):
+                    u_col, v_col = uv_pairs[offset + k]
+                    try:
+                        u, v = float(row[u_col]), float(row[v_col])
+                        hand_uv.append(None if (math.isnan(u) or math.isnan(v)) else (u, v))
+                    except (ValueError, KeyError):
+                        hand_uv.append(None)
+
+                # Draw skeleton lines first (underneath dots).
+                for a, b in HAND_CONNECTIONS:
+                    if hand_uv[a] is not None and hand_uv[b] is not None:
+                        color = LANDMARK_COLORS[a]
+                        draw.line([hand_uv[a], hand_uv[b]], fill=color, width=_LINE_WIDTH)
+
+                # Draw dots on top.
+                for k, pt in enumerate(hand_uv):
+                    if pt is None:
+                        continue
+                    u, v = pt
+                    r = _DOT_RADIUS
+                    draw.ellipse([u - r - 1, v - r - 1, u + r + 1, v + r + 1], fill=(0, 0, 0))
+                    draw.ellipse([u - r, v - r, u + r, v + r], fill=LANDMARK_COLORS[k])
+
+            debug_path = frame_path.with_stem(frame_path.stem + "_debug")
+            img.save(debug_path)
+
+        click.echo(f"[phanesim] Debug keypoints: {len(frame_paths)} frame(s) in {cam_dir}")
 
 
 VALIDATE_KINDS = (
@@ -125,7 +190,24 @@ def validate(kind: str, input_path: Path) -> None:
     show_envvar=True,
     help="Path to the Blender executable. Auto-detected as 'blender5' or 'blender' if not set.",
 )
-def generate(kind: str, input_path: Path, output_path: Path, blender_bin: str | None) -> None:
+@click.option(
+    "--debug_kps",
+    is_flag=True,
+    default=False,
+    help=(
+        "After rendering, overlay the projected 21-landmark hand skeleton on each frame "
+        "and save frame_XXXXXX_debug.png alongside the rendered images. "
+        "Note: keypoint positions are based on camera intrinsics only and do not account "
+        "for the compositor barrel distortion, so the overlay is approximate."
+    ),
+)
+def generate(
+    kind: str,
+    input_path: Path,
+    output_path: Path,
+    blender_bin: str | None,
+    debug_kps: bool,
+) -> None:
     """Render a sequence or project by driving Blender headlessly.
 
     Requires Blender to be installed. Set BLENDER_BIN or pass --blender to
@@ -158,7 +240,11 @@ def generate(kind: str, input_path: Path, output_path: Path, blender_bin: str | 
     # renderer) provides a valid EGL surfaceless context without a display.
     env = {**os.environ, "LIBGL_ALWAYS_SOFTWARE": "1"}
     result = subprocess.run([blender, "--background", "--factory-startup", "--python-expr", expr], env=env)
-    sys.exit(result.returncode)
+    if result.returncode != 0:
+        sys.exit(result.returncode)
+    if debug_kps:
+        _overlay_keypoints(output_path)
+    sys.exit(0)
 
 
 @cli.command()
