@@ -37,6 +37,7 @@ import mathutils  # pyright: ignore[reportMissingImports]
 import numpy as np
 
 from phanesim.rig import Project, Sequence
+from phanesim.skeleton import HAND_CONNECTIONS, HAND_LANDMARKS, LANDMARK_COLORS  # noqa: F401
 from phanesim.types import Camera, CameraModel, Shutter, Transform, Vector3
 
 # 180° rotation around X: converts OpenCV camera frame to Blender camera frame.
@@ -560,7 +561,7 @@ def _configure_render(scene: bpy.types.Scene, camera: Camera, cam_obj: bpy.types
     if getattr(camera, "motion_blur", False):
         scene.render.use_motion_blur = True
 
-    scene.eevee.taa_render_samples = 64
+    scene.eevee.taa_render_samples = 16
     if hasattr(scene.eevee, "use_gtao"):
         scene.eevee.use_gtao = False
     if hasattr(scene.eevee, "use_bloom"):
@@ -569,15 +570,22 @@ def _configure_render(scene: bpy.types.Scene, camera: Camera, cam_obj: bpy.types
     _setup_compositor(scene, camera)
 
 
+_HAND_LANDMARKS = HAND_LANDMARKS
+
+
 def _joint_columns(seq: Sequence) -> list[str]:
-    """Return ordered column names for the joints_2d CSV (excluding timestamp)."""
+    """Return ordered column names for the joints_2d CSV (excluding timestamp).
+
+    One (u, v) pair per MediaPipe landmark per hand — 21 landmarks × 2 = 42 columns
+    per hand.
+    """
     cols: list[str] = []
     rig = seq.camhand_rig
     for h, hand in enumerate(rig.hands):
         hand_label = hand.name or f"hand{h}"
-        for joint_name in seq.hand_motions[h].joint_names:
-            cols.append(f"{hand_label}_{joint_name}_u")
-            cols.append(f"{hand_label}_{joint_name}_v")
+        for lm_name, _, _ in _HAND_LANDMARKS:
+            cols.append(f"{hand_label}_{lm_name}_u")
+            cols.append(f"{hand_label}_{lm_name}_v")
     return cols
 
 
@@ -676,11 +684,35 @@ def render_sequence(seq: Sequence, output_path: Path) -> None:
 
                 T_c_h = rig.T_c_h[c][h]
                 T_cam_hand = T_cam_world * T_c_h
-                for joint_pose in joint_poses:
-                    p_world = joint_pose.translation
+                mat_world = arm_obj.matrix_world
+                arm_bones = arm_obj.pose.bones
+
+                # Read all 21 landmark positions directly from the posed armature.
+                # The CSV stores (0,0,0) for non-wrist joint positions; only the
+                # armature's bone head/tail positions after posing are meaningful.
+                W_px, H_px = camera.resolution
+                cx = camera.intrinsics.parameters.get("cx", W_px / 2.0)
+                cy = camera.intrinsics.parameters.get("cy", H_px / 2.0)
+                for _lm_name, src_type, bone_name in _HAND_LANDMARKS:
+                    pb = arm_bones.get(bone_name)
+                    if pb is None:
+                        row.extend([float("nan"), float("nan")])
+                        continue
+                    w = mat_world @ (pb.tail if src_type == "arm_tail" else pb.head)
+                    p_world = np.array([w.x, w.y, w.z], dtype=np.float64)
                     p_cam = T_cam_hand.apply(p_world)
                     if p_cam[2] > 0:
                         u, v = project_point(p_cam, camera.intrinsics)
+                        # Apply the same barrel distortion + scale that the compositor
+                        # adds after rendering so that CSV coords match the output image.
+                        # Blender normalises by W/2 (preserving circular distortion pattern).
+                        half = W_px / 2.0
+                        xn = (u - cx) / half
+                        yn = (v - cy) / half
+                        r2 = xn * xn + yn * yn
+                        barrel = 1.0 + camera.distortion * r2
+                        u = cx + xn * barrel * camera.lens_scale * half
+                        v = cy + yn * barrel * camera.lens_scale * half
                     else:
                         u, v = float("nan"), float("nan")
                     row.extend([u, v])

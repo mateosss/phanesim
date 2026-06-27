@@ -40,7 +40,7 @@ uv sync --all-groups # Install with uv (including development tools)
 uv run pyright # Run Pyright
 uv run ruff check . # Run Ruff lint checks
 uv run ruff format --check . # Run Ruff formatter check
-uv run python scripts/check_spdx_headers.py # Run SPDX header check
+
 ```
 
 ## Blender workflow
@@ -195,8 +195,11 @@ The CLI will have the following commands:
 # Render PNG frames to disk (headless rendering)
 uv run phanesim generate sequence data/sequences/minimal/sequence.json --output output_folder
 
-# Open Blender GUI with animation baked on timeline (new)
+# Save the render immediately for preview in Blender GUI
 uv run phanesim preview sequence data/sequences/minimal/sequence.json --output preview1.blend
+
+# after rendering, reads joints_2d.csv and overlays the 21-landmark skeleton on each frame
+uv run phanesim generate sequence data/sequences/minimal/sequence.json --output output_folder --debug_kps
 
 ./phanesim generate project project.json --output output_project_folder
 # generates all the sequences in the project, each in a separate folder under output_project_folder
