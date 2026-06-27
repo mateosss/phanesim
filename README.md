@@ -198,6 +198,9 @@ uv run phanesim generate sequence data/sequences/minimal/sequence.json --output 
 # Save the render immediately for preview in Blender GUI
 uv run phanesim preview sequence data/sequences/minimal/sequence.json --output preview1.blend
 
+# after rendering, reads joints_2d.csv and overlays the 21-landmark skeleton on each frame
+uv run phanesim generate sequence data/sequences/minimal/sequence.json --output output_folder --debug_kps
+
 ./phanesim generate project project.json --output output_project_folder
 # generates all the sequences in the project, each in a separate folder under output_project_folder
 ```

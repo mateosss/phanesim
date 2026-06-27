@@ -10,31 +10,32 @@ Blender) and cli.py (regular Python environment).
 from __future__ import annotations
 
 # Each entry: (output_name, source_type, blender_bone_name)
-#   "csv_head"  — joint_pose.translation from hand_motion CSV (bone HEAD in world space)
-#   "arm_head"  — bone HEAD read directly from the posed armature (not in CSV)
-#   "arm_tail"  — bone TAIL read directly from the posed armature (fingertips)
+#   "arm_head"  — proximal end of the bone (root/joint side); used for every joint
+#   "arm_tail"  — distal end of the bone (tip side); only used for fingertips,
+#                 which have no child bone so their position only exists as the
+#                 parent Distal bone's tail
 HAND_LANDMARKS: list[tuple[str, str, str]] = [
     ("Wrist", "arm_head", "Wrist"),
-    ("ThumbCMC", "arm_head", "ThumbMetacarpal"),
-    ("ThumbMCP", "arm_head", "ThumbProximal"),
-    ("ThumbIP", "arm_head", "ThumbDistal"),
+    ("ThumbMetacarpal", "arm_head", "ThumbMetacarpal"),
+    ("ThumbProximal", "arm_head", "ThumbProximal"),
+    ("ThumbDistal", "arm_head", "ThumbDistal"),
     ("ThumbTip", "arm_tail", "ThumbDistal"),
-    ("IndexMCP", "arm_head", "IndexProximal"),
-    ("IndexPIP", "arm_head", "IndexIntermediate"),
-    ("IndexDIP", "arm_head", "IndexDistal"),
+    ("IndexProximal", "arm_head", "IndexProximal"),
+    ("IndexIntermediate", "arm_head", "IndexIntermediate"),
+    ("IndexDistal", "arm_head", "IndexDistal"),
     ("IndexTip", "arm_tail", "IndexDistal"),
-    ("MiddleMCP", "arm_head", "MiddleProximal"),
-    ("MiddlePIP", "arm_head", "MiddleIntermediate"),
-    ("MiddleDIP", "arm_head", "MiddleDistal"),
+    ("MiddleProximal", "arm_head", "MiddleProximal"),
+    ("MiddleIntermediate", "arm_head", "MiddleIntermediate"),
+    ("MiddleDistal", "arm_head", "MiddleDistal"),
     ("MiddleTip", "arm_tail", "MiddleDistal"),
-    ("RingMCP", "arm_head", "RingProximal"),
-    ("RingPIP", "arm_head", "RingIntermediate"),
-    ("RingDIP", "arm_head", "RingDistal"),
+    ("RingProximal", "arm_head", "RingProximal"),
+    ("RingIntermediate", "arm_head", "RingIntermediate"),
+    ("RingDistal", "arm_head", "RingDistal"),
     ("RingTip", "arm_tail", "RingDistal"),
-    ("PinkyMCP", "arm_head", "LittleProximal"),
-    ("PinkyPIP", "arm_head", "LittleIntermediate"),
-    ("PinkyDIP", "arm_head", "LittleDistal"),
-    ("PinkyTip", "arm_tail", "LittleDistal"),
+    ("LittleProximal", "arm_head", "LittleProximal"),
+    ("LittleIntermediate", "arm_head", "LittleIntermediate"),
+    ("LittleDistal", "arm_head", "LittleDistal"),
+    ("LittleTip", "arm_tail", "LittleDistal"),
 ]
 
 # Skeleton connectivity: index pairs into HAND_LANDMARKS.
@@ -71,5 +72,5 @@ LANDMARK_COLORS: list[tuple[int, int, int]] = (
     + [(255, 180, 0)] * 4  # 5–8  Index — orange
     + [(80, 220, 80)] * 4  # 9–12 Middle — green
     + [(80, 120, 255)] * 4  # 13–16 Ring — blue
-    + [(180, 80, 255)] * 4  # 17–20 Pinky — purple
+    + [(180, 80, 255)] * 4  # 17–20 Little — purple
 )
