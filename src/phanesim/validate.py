@@ -50,6 +50,32 @@ def validate_project(path: Path) -> None:
     _validate_json(path, "project.json")
 
 
+def validate_body_rig(path: Path) -> None:
+    _validate_json(path, "body_rig.json")
+
+
+def validate_body_sequence(path: Path) -> None:
+    _validate_json(path, "body_sequence.json")
+
+
+def validate_pose_motion(path: Path) -> None:
+    """Validate a pose motion description against its schema, then its ordering.
+
+    The schema cannot express that events must be chronological, so that is
+    checked here.
+    """
+    _validate_json(path, "pose_motion.json")
+
+    data = json.loads(path.read_text())
+    times = [int(e["t_ns"]) for e in data["events"]]
+    if times != sorted(times):
+        raise ValueError("pose_motion events must be sorted by t_ns")
+    duration = int(data["duration_ns"])
+    late = [t for t in times if t > duration]
+    if late:
+        raise ValueError(f"pose_motion events start after duration_ns={duration}: {late}")
+
+
 _CAMERA_MOTION_COLUMNS = {"timestamp", "px", "py", "pz", "qx", "qy", "qz", "qw"}
 
 

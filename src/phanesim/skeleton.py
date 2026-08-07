@@ -1,7 +1,18 @@
 # Copyright 2026, Yutong Wan.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""MediaPipe-compatible 21-landmark hand skeleton definition.
+"""OpenXR-compatible 21-landmark hand skeleton definition.
+
+Landmark names follow the OpenXR hand tracking convention.  Non-thumb
+metacarpals are omitted, which leaves exactly 21 joints:
+
+    Wrist
+    Thumb:  Metacarpal, Proximal, Distal, Tip
+    Index / Middle / Ring / Little:  Proximal, Intermediate, Distal, Tip
+
+Two rigs are supported, each with its own bone naming:
+  * the standalone hand rig (hand.blend)      -> HAND_LANDMARKS
+  * the Rigify full-body rig (cmale1.blend)   -> rigify_hand_landmarks(side)
 
 Kept in a bpy-free module so it can be imported by both render.py (inside
 Blender) and cli.py (regular Python environment).
@@ -37,6 +48,61 @@ HAND_LANDMARKS: list[tuple[str, str, str]] = [
     ("LittleDistal", "arm_head", "LittleDistal"),
     ("LittleTip", "arm_tail", "LittleDistal"),
 ]
+
+# Rigify finger-chain names, in OpenXR landmark order.  Rigify numbers each
+# finger chain .01/.02/.03 from the knuckle outward, and the thumb chain starts
+# one joint earlier at the metacarpal — so thumb.01/02/03 lines up exactly with
+# OpenXR Metacarpal/Proximal/Distal.
+_RIGIFY_FINGERS: list[tuple[str, str]] = [
+    # (OpenXR finger name, Rigify chain name)
+    ("Index", "f_index"),
+    ("Middle", "f_middle"),
+    ("Ring", "f_ring"),
+    ("Little", "f_pinky"),
+]
+
+
+def rigify_hand_landmarks(side: str) -> list[tuple[str, str, str]]:
+    """Return the 21 landmark definitions for one hand of a Rigify body rig.
+
+    ORG- bones are used rather than the animator-facing control bones: they are
+    the canonical joint chain that the deform bones follow, so their head/tail
+    positions are the true anatomical joint locations after posing.
+
+    Args:
+        side: "left"/"L" or "right"/"R" (case-insensitive).
+
+    Returns:
+        A list of (openxr_name, source_type, bone_name) triples in the same
+        order and format as HAND_LANDMARKS.
+
+    Raises:
+        ValueError: If *side* is not recognisable as left or right.
+    """
+    s = side.strip().lower()
+    if s in ("l", "left"):
+        suffix = "L"
+    elif s in ("r", "right"):
+        suffix = "R"
+    else:
+        raise ValueError(f"side must be 'left' or 'right', got {side!r}")
+
+    landmarks: list[tuple[str, str, str]] = [
+        ("Wrist", "arm_head", f"ORG-hand.{suffix}"),
+        ("ThumbMetacarpal", "arm_head", f"ORG-thumb.01.{suffix}"),
+        ("ThumbProximal", "arm_head", f"ORG-thumb.02.{suffix}"),
+        ("ThumbDistal", "arm_head", f"ORG-thumb.03.{suffix}"),
+        ("ThumbTip", "arm_tail", f"ORG-thumb.03.{suffix}"),
+    ]
+    for openxr_name, chain in _RIGIFY_FINGERS:
+        landmarks += [
+            (f"{openxr_name}Proximal", "arm_head", f"ORG-{chain}.01.{suffix}"),
+            (f"{openxr_name}Intermediate", "arm_head", f"ORG-{chain}.02.{suffix}"),
+            (f"{openxr_name}Distal", "arm_head", f"ORG-{chain}.03.{suffix}"),
+            (f"{openxr_name}Tip", "arm_tail", f"ORG-{chain}.03.{suffix}"),
+        ]
+    return landmarks
+
 
 # Skeleton connectivity: index pairs into HAND_LANDMARKS.
 HAND_CONNECTIONS: list[tuple[int, int]] = [

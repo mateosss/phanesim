@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "body_rig.json",
+  "title": "BodyRig",
+  "description": "Head-mounted cameras attached to one full-body model. There is no T_c_h: body joints are already in world space and each camera pose is derived from the head bone every frame.",
+  "type": "object",
+  "required": ["cameras", "body"],
+  "additionalProperties": false,
+  "properties": {
+    "cameras": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "camera.json"}
+    },
+    "body": {"$ref": "#/$defs/body"},
+    "head_camera": {"$ref": "#/$defs/head_camera"}
+  },
+  "$defs": {
+    "body": {
+      "type": "object",
+      "required": ["model"],
+      "additionalProperties": false,
+      "properties": {
+        "model": {
+          "type": "string",
+          "description": "Path to the .blend holding the mesh, rig and pose assets."
+        },
+        "armature": {
+          "type": "string",
+          "description": "Name of the armature object inside the .blend. Defaults to 'rig'."
+        },
+        "name": {"type": "string"},
+        "hands": {
+          "type": "array",
+          "description": "Hand sides exported to joints_2d.csv, in column order.",
+          "items": {"enum": ["left", "right"]},
+          "minItems": 1,
+          "maxItems": 2,
+          "uniqueItems": true
+        }
+      }
+    },
+    "head_camera": {
+      "type": "object",
+      "description": "A forward-facing AR-headset camera rigidly attached to the head, turning toward the tracked hands only within max_deviation_deg.",
+      "additionalProperties": false,
+      "properties": {
+        "anchor_bone": {
+          "type": "string",
+          "description": "Head bone the camera is rigidly attached to. Defaults to 'ORG-spine.006' (the head bone of a Rigify rig)."
+        },
+        "rest_position": {
+          "type": "array",
+          "description": "World-space camera position while the body is in its rest pose. Must lie outside the head mesh, in front of the nose tip.",
+          "items": {"type": "number"},
+          "minItems": 3,
+          "maxItems": 3
+        },
+        "rest_forward": {
+          "type": "array",
+          "description": "World-space direction the camera looks while the body is in its rest pose. Defaults to [0, -1, 0], the direction the body faces.",
+          "items": {"type": "number"},
+          "minItems": 3,
+          "maxItems": 3
+        },
+        "track_hands": {
+          "type": "array",
+          "description": "Hand sides treated as the subject. With both listed the camera aims at their midpoint, so left, right and two-handed poses are all framed.",
+          "items": {"enum": ["left", "right"]},
+          "minItems": 1,
+          "maxItems": 2,
+          "uniqueItems": true
+        },
+        "track_landmark": {
+          "type": "string",
+          "description": "Landmark within each tracked hand that the camera aims at. Defaults to 'MiddleProximal', the middle knuckle, which centres the palm."
+        },
+        "max_deviation_deg": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 90,
+          "description": "How far the gaze may turn from straight ahead to frame the hands. 0 gives a rigidly forward camera; the default 35 matches a comfortable head turn."
+        }
+      }
+    }
+  }
+}

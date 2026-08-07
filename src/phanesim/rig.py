@@ -11,7 +11,8 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 
 from phanesim.motion import CameraMotion, HandMotion
-from phanesim.types import Camera, CameraModel, Color, Hand, Shutter, Transform
+from phanesim.posemotion import PoseMotion
+from phanesim.types import Body, Camera, CameraModel, Color, Hand, HeadCamera, Shutter, Transform
 
 
 def _transform_from_dict(data: dict) -> Transform:
@@ -131,6 +132,103 @@ class Sequence:
 
     @classmethod
     def from_path(cls, path: Path) -> Sequence:
+        return cls.from_dict(json.loads(path.read_text()), base_dir=path.parent)
+
+
+def _body_from_dict(data: dict, base_dir: Path) -> Body:
+    return Body(
+        model=base_dir / data["model"],
+        armature=str(data.get("armature", "rig")),
+        name=data.get("name"),
+        hands=tuple(data.get("hands", ("right", "left"))),
+    )
+
+
+def _head_camera_from_dict(data: dict) -> HeadCamera:
+    def _vec(key: str, default: list[float] | None) -> np.ndarray | None:
+        value = data.get(key, default)
+        return None if value is None else np.array(value, dtype=np.float32)
+
+    return HeadCamera(
+        anchor_bone=str(data.get("anchor_bone", "ORG-spine.006")),
+        rest_position=_vec("rest_position", None),
+        # The body faces -Y in rest pose, so that is where a headset looks.
+        rest_forward=_vec("rest_forward", [0.0, -1.0, 0.0]),
+        track_hands=tuple(data.get("track_hands", ("right", "left"))),
+        track_landmark=str(data.get("track_landmark", "MiddleProximal")),
+        max_deviation_deg=float(data.get("max_deviation_deg", 35.0)),
+    )
+
+
+@dataclass
+class BodyRig:
+    """A set of head-mounted cameras attached to one full-body model.
+
+    Unlike CameraHandRig there is no T_c_h: the body's joints are already in
+    world space, and each camera's pose is derived from the head bone every
+    frame rather than read from a trajectory file.
+
+    JSON schema:
+      {
+        "cameras":     [<camera>, ...],
+        "body":        <body>,
+        "head_camera": <head_camera>
+      }
+    """
+
+    cameras: list[Camera]
+    body: Body
+    head_camera: HeadCamera
+
+    @classmethod
+    def from_dict(cls, data: dict, base_dir: Path) -> BodyRig:
+        return cls(
+            cameras=[_camera_from_dict(c, base_dir) for c in data["cameras"]],
+            body=_body_from_dict(data["body"], base_dir),
+            head_camera=_head_camera_from_dict(data.get("head_camera", {})),
+        )
+
+    @classmethod
+    def from_path(cls, path: Path) -> BodyRig:
+        return cls.from_dict(json.loads(path.read_text()), base_dir=path.parent)
+
+
+@dataclass
+class BodySequence:
+    """One rendering sequence driven by pose assets instead of motion CSVs.
+
+    The hand_motions entries are paths to pose *motion description* JSONs (see
+    phanesim.posemotion), not CSVs: they name which pose asset is reached when,
+    and the bone values are resolved from the model .blend at render time.
+
+    JSON schema:
+      {
+        "name":         "<str>",
+        "output_path":  "<relative-or-absolute path>",
+        "body_rig":     <BodyRig dict>,
+        "hand_motions": ["<path-to-animation-json>", ...],
+        "hdri":         "<path>"           -- optional
+      }
+    """
+
+    name: str
+    output_path: Path
+    body_rig: BodyRig
+    hand_motions: list[PoseMotion]
+    hdri: Path | None = None
+
+    @classmethod
+    def from_dict(cls, data: dict, base_dir: Path) -> BodySequence:
+        return cls(
+            name=str(data["name"]),
+            output_path=Path(data["output_path"]),
+            body_rig=BodyRig.from_dict(data["body_rig"], base_dir),
+            hand_motions=[PoseMotion.from_path(base_dir / p) for p in data["hand_motions"]],
+            hdri=(base_dir / data["hdri"]) if data.get("hdri") else None,
+        )
+
+    @classmethod
+    def from_path(cls, path: Path) -> BodySequence:
         return cls.from_dict(json.loads(path.read_text()), base_dir=path.parent)
 
 

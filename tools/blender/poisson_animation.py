@@ -1,6 +1,8 @@
 # Copyright 2026, Yutong Wan.
 # SPDX-License-Identifier: BSD-3-Clause
 
+# This script generates a Poisson-distributed sequence of hand poses and animations
+
 import os
 import random
 
@@ -12,12 +14,28 @@ total_frames = 500
 fps = bpy.context.scene.render.fps
 rig_name = "rig"
 
+# sample poses:
+
 # Static poses (single frame) — Poisson-sampled transitions between these
-pose_assets = ["hand_wave", "Right_Pat", "Right_ThumbUp", "Right_fist", "Right_ok"]
+pose_assets = [
+    "hand_wave",
+    "Right_Pat",
+    "Right_ThumbUp",
+    "Right_fist",
+    "Right_ok",
+    "Right_one.002",
+    "Right_two",
+    "Right_three",
+    "Right_four",
+    "Left_default",
+    "Left_grab",
+    "Left_pointing",
+    "Look_At_Hand",
+]
 # Dynamic animations (multi-frame) — played back in full
 action_assets = ["Wave_Animation"]
 
-# Path to external asset library (safe to be missing if poses are already in the current file)
+# Path to external asset library (This will be deleted, just to keep safe if some assets are missing)
 asset_library_path = r"C:\Users\wanyt\Documents\Blender\Assets"
 # =======================================================
 

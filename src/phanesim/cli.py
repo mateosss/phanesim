@@ -4,10 +4,12 @@
 from __future__ import annotations
 
 import csv
+import json
 import math
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import click
@@ -15,6 +17,12 @@ import jsonschema
 from PIL import Image, ImageDraw
 
 import phanesim.validate as val
+from phanesim.posemotion import (
+    DEFAULT_EVENTS_PER_SECOND,
+    NS_PER_SECOND,
+    PoseAsset,
+    sample_pose_motion,
+)
 from phanesim.skeleton import HAND_CONNECTIONS, LANDMARK_COLORS
 
 # Parent directory of the phanesim package, added to sys.path inside Blender
@@ -129,6 +137,22 @@ def _overlay_keypoints(output_path: Path) -> None:
         click.echo(f"[phanesim] Debug keypoints: {len(frame_paths)} frame(s) in {cam_dir}")
 
 
+def _sys_path_setup() -> str:
+    """Python snippet that makes `import phanesim` work inside Blender."""
+    return f"import sys; sys.path.insert(0, {_PKG_PARENT!r}); "
+
+
+def _run_blender(expr: str, blender_bin: str | None) -> int:
+    """Run *expr* in headless Blender and return its exit code."""
+    blender = _find_blender(blender_bin)
+    # LIBGL_ALWAYS_SOFTWARE=1: EEVEE Next requires a display for GPU Vulkan context
+    # creation; no display is available in WSL2 headless mode. LLVMpipe (Mesa CPU
+    # renderer) provides a valid EGL surfaceless context without a display.
+    env = {**os.environ, "LIBGL_ALWAYS_SOFTWARE": "1"}
+    result = subprocess.run([blender, "--background", "--factory-startup", "--python-expr", expr], env=env)
+    return result.returncode
+
+
 VALIDATE_KINDS = (
     "camera",
     "camera_motion",
@@ -137,14 +161,18 @@ VALIDATE_KINDS = (
     "camhand_rig",
     "sequence",
     "project",
+    "body_rig",
+    "body_sequence",
+    "pose_motion",
 )
 
 GENERATE_KINDS = (
     "sequence",
     "project",
+    "body_sequence",
 )
 
-PREVIEW_KINDS = ("sequence",)
+PREVIEW_KINDS = ("sequence", "body_sequence")
 
 _VALIDATE_FNS = {
     "camera": val.validate_camera,
@@ -154,6 +182,9 @@ _VALIDATE_FNS = {
     "camhand_rig": val.validate_camhand_rig,
     "sequence": val.validate_sequence,
     "project": val.validate_project,
+    "body_rig": val.validate_body_rig,
+    "body_sequence": val.validate_body_sequence,
+    "pose_motion": val.validate_pose_motion,
 }
 
 
@@ -216,35 +247,133 @@ def generate(
     input_abs = str(input_path.resolve())
     output_abs = str(output_path.resolve())
 
-    sys_path_setup = f"import sys; sys.path.insert(0, {_PKG_PARENT!r}); "
-    if kind == "sequence":
-        expr = (
-            sys_path_setup
-            + "from pathlib import Path; "
-            + "from phanesim.rig import Sequence; "
-            + "from phanesim.render import render_sequence; "
-            + f"render_sequence(Sequence.from_path(Path({input_abs!r})), Path({output_abs!r}))"
-        )
-    else:
-        expr = (
-            sys_path_setup
-            + "from pathlib import Path; "
-            + "from phanesim.rig import Project; "
-            + "from phanesim.render import render_project; "
-            + f"render_project(Project.from_path(Path({input_abs!r})), Path({output_abs!r}))"
-        )
+    loaders = {
+        "sequence": ("Sequence", "render_sequence"),
+        "project": ("Project", "render_project"),
+        "body_sequence": ("BodySequence", "render_body_sequence"),
+    }
+    cls_name, fn_name = loaders[kind]
+    expr = (
+        _sys_path_setup()
+        + "from pathlib import Path; "
+        + f"from phanesim.rig import {cls_name}; "
+        + f"from phanesim.render import {fn_name}; "
+        + f"{fn_name}({cls_name}.from_path(Path({input_abs!r})), Path({output_abs!r}))"
+    )
 
-    blender = _find_blender(blender_bin)
-    # LIBGL_ALWAYS_SOFTWARE=1: EEVEE Next requires a display for GPU Vulkan context
-    # creation; no display is available in WSL2 headless mode. LLVMpipe (Mesa CPU
-    # renderer) provides a valid EGL surfaceless context without a display.
-    env = {**os.environ, "LIBGL_ALWAYS_SOFTWARE": "1"}
-    result = subprocess.run([blender, "--background", "--factory-startup", "--python-expr", expr], env=env)
-    if result.returncode != 0:
-        sys.exit(result.returncode)
+    returncode = _run_blender(expr, blender_bin)
+    if returncode != 0:
+        sys.exit(returncode)
     if debug_kps:
         _overlay_keypoints(output_path)
     sys.exit(0)
+
+
+@cli.command(name="generate-motion")
+@click.option(
+    "--model",
+    "model_path",
+    type=click.Path(path_type=Path, exists=True),
+    required=True,
+    help="Path to the .blend holding the pose assets (e.g. data/cmale1.blend).",
+)
+@click.option(
+    "--output",
+    "output_dir",
+    type=click.Path(path_type=Path),
+    required=True,
+    help="Directory the animation JSON files are written to.",
+)
+@click.option("--count", default=1, show_default=True, help="Number of animation descriptions to generate.")
+@click.option("--duration", default=20.0, show_default=True, help="Length of each animation in seconds.")
+@click.option(
+    "--events-per-second",
+    default=DEFAULT_EVENTS_PER_SECOND,
+    show_default=True,
+    help="Rate of the Poisson process; higher means busier motion.",
+)
+@click.option("--blend", default=0.5, show_default=True, help="Transition duration into each pose, in seconds.")
+@click.option("--min-gap", default=1.5, show_default=True, help="Minimum seconds between two pose events.")
+@click.option(
+    "--seed",
+    default=None,
+    type=int,
+    help="Seed for the first animation; later ones increment from it. Omit for a random draw.",
+)
+@click.option("--prefix", default="animation", show_default=True, help="Basename of the generated files.")
+@click.option(
+    "--blender",
+    "blender_bin",
+    default=None,
+    envvar="BLENDER_BIN",
+    show_envvar=True,
+    help="Path to the Blender executable. Auto-detected if not set.",
+)
+def generate_motion(
+    model_path: Path,
+    output_dir: Path,
+    count: int,
+    duration: float,
+    events_per_second: float,
+    blend: float,
+    min_gap: float,
+    seed: int | None,
+    prefix: str,
+    blender_bin: str | None,
+) -> None:
+    """Generate random pose motion descriptions from a model's pose assets.
+
+    Writes animation01.json, animation02.json, ... — each a timeline saying which
+    pose is reached at which time, drawn from a Poisson process so every run
+    differs.  The descriptions hold no bone data; the poses themselves stay in
+    the .blend and are resolved when `phanesim generate body_sequence` renders.
+
+    Blender is launched once to enumerate the pose assets, then all the
+    timelines are sampled in-process.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        assets_json = Path(tmp) / "pose_assets.json"
+        expr = (
+            _sys_path_setup()
+            + "from pathlib import Path; "
+            + "from phanesim.render import enumerate_pose_assets; "
+            + f"enumerate_pose_assets(Path({str(model_path.resolve())!r}), Path({str(assets_json)!r}))"
+        )
+        click.echo(f"[phanesim] Enumerating pose assets in {model_path.name} ...")
+        if (code := _run_blender(expr, blender_bin)) != 0:
+            sys.exit(code)
+        if not assets_json.exists():
+            click.echo("Error: Blender did not report any pose assets.", err=True)
+            sys.exit(1)
+        assets = [PoseAsset.from_dict(a) for a in json.loads(assets_json.read_text())["assets"]]
+
+    if not assets:
+        click.echo(f"Error: no asset-marked actions found in {model_path}.", err=True)
+        sys.exit(1)
+
+    poses = [a for a in assets if not a.is_action]
+    actions = [a for a in assets if a.is_action]
+    click.echo(f"[phanesim] Found {len(poses)} pose(s) and {len(actions)} animation(s).")
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    for i in range(count):
+        name = f"{prefix}{i + 1:02d}"
+        motion = sample_pose_motion(
+            assets,
+            duration_ns=int(duration * NS_PER_SECOND),
+            name=name,
+            events_per_second=events_per_second,
+            blend_ns=int(blend * NS_PER_SECOND),
+            min_gap_ns=int(min_gap * NS_PER_SECOND),
+            seed=None if seed is None else seed + i,
+            model=str(model_path),
+        )
+        out_path = output_dir / f"{name}.json"
+        motion.write(out_path)
+        click.echo(f"  {out_path}  ({len(motion.events)} events, seed={motion.seed})")
+        click.echo(motion.summary())
+
+    click.echo(f"[phanesim] Wrote {count} animation description(s) to {output_dir}")
 
 
 @cli.command()
@@ -277,25 +406,20 @@ def preview(kind: str, input_path: Path, output_blend: Path, blender_bin: str | 
     input_abs = str(input_path.resolve())
     blend_out = str(Path(output_blend).resolve())
 
-    sys_path_setup = f"import sys; sys.path.insert(0, {_PKG_PARENT!r}); "
-    expr = (
-        sys_path_setup
-        + "from pathlib import Path; "
-        + "from phanesim.rig import Sequence; "
-        + "from phanesim.render import preview_sequence; "
-        + f"preview_sequence(Sequence.from_path(Path({input_abs!r})), {blend_out!r})"
+    cls_name, fn_name = (
+        ("BodySequence", "preview_body_sequence") if kind == "body_sequence" else ("Sequence", "preview_sequence")
     )
-
-    blender = _find_blender(blender_bin)
-    headless_env = {**os.environ, "LIBGL_ALWAYS_SOFTWARE": "1"}
+    expr = (
+        _sys_path_setup()
+        + "from pathlib import Path; "
+        + f"from phanesim.rig import {cls_name}; "
+        + f"from phanesim.render import {fn_name}; "
+        + f"{fn_name}({cls_name}.from_path(Path({input_abs!r})), {blend_out!r})"
+    )
 
     click.echo("Baking keyframes (headless)...")
-    r = subprocess.run(
-        [blender, "--background", "--factory-startup", "--python-expr", expr],
-        env=headless_env,
-    )
-    if r.returncode != 0:
-        sys.exit(r.returncode)
+    if (code := _run_blender(expr, blender_bin)) != 0:
+        sys.exit(code)
 
     click.echo(f"Preview saved: {blend_out}")
 

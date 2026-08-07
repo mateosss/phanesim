@@ -204,3 +204,59 @@ uv run phanesim generate sequence data/sequences/minimal/sequence.json --output 
 ./phanesim generate project project.json --output output_project_folder
 # generates all the sequences in the project, each in a separate folder under output_project_folder
 ```
+
+## Body sequences: pose assets and Poisson motion
+
+The full-body model (`data/cmale1.blend`) is animated by combining pose assets, named poses and animations authored in Blender and marked as assets
+
+### 1. Generate motion descriptions
+
+```bash
+# Draw 5 random timelines from the pose assets found in the model (write 5 descriptions)
+uv run phanesim generate-motion \
+    --model data/cmale1.blend \
+    --output data/sequences/poisson \
+    --count 5 --duration 20 --events-per-second 0.4
+```
+
+This writes `animation01.json`, `animation02.json`, … Each is a *description*:
+which pose asset is reached at which time, and nothing else. Event times come
+from a Poisson process, so the gaps between gestures are exponentially
+distributed and memoryless — the statistics of spontaneous, unscheduled hand
+movement. Every run produces a different timeline; pass `--seed` to
+reproduce one exactly.
+
+```json example:
+{
+  "name": "animation01",
+  "seed": 1,
+  "events_per_second": 0.4,
+  "duration_ns": 8000000000,
+  "events": [
+    {"t_ns": 0,          "asset": "Left_default", "kind": "pose",   "blend_ns": 0},
+    {"t_ns": 1500000000, "asset": "hand_wave",    "kind": "pose",   "blend_ns": 500000000},
+    {"t_ns": 3530000000, "asset": "Left_grab",    "kind": "pose",   "blend_ns": 500000000}
+  ]
+}
+```
+
+An event names the asset that is fully reached at `t_ns`; the transition into
+it starts `blend_ns` earlier. Multi-frame assets (`"kind": "action"`, e.g.
+`Wave_Animation`) are played back in full over `duration_ns`.
+
+Because a description holds no bone data it stays small and readable, and the
+poses themselves are only resolved from the `.blend` at render time.
+
+### 2. Render
+
+```bash
+uv run phanesim generate body_sequence data/sequences/poisson/sequence.json --output output_folder
+uv run phanesim preview body_sequence data/sequences/poisson/sequence.json --output preview.blend
+```
+
+The sequence's `hand_motions` field lists the animation JSONs to render. With
+one entry the output layout matches a normal sequence; with several, each is
+rendered as its own take into `<output>/<animation name>/`.
+
+`tools/blender/poisson_animation.py` is the standalone in-Blender version of the same sampling idea, for driving the rig interactively from the Scripting
+workspace.
