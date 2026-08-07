@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pose_motion.json",
+  "title": "PoseMotion",
+  "description": "A motion description: which pose asset is reached at which time. Bone values are not stored here; they are resolved from the pose assets inside the model .blend at render time.",
+  "type": "object",
+  "required": ["name", "duration_ns", "events"],
+  "additionalProperties": false,
+  "properties": {
+    "name": {"type": "string"},
+    "model": {
+      "oneOf": [{"type": "null"}, {"type": "string"}],
+      "description": "Path to the .blend the pose assets were enumerated from, recorded for reference."
+    },
+    "seed": {
+      "oneOf": [{"type": "null"}, {"type": "integer"}],
+      "description": "Seed of the random draw; re-running with this seed reproduces the timeline."
+    },
+    "events_per_second": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "description": "Rate of the Poisson process that produced the event times."
+    },
+    "duration_ns": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "description": "Length of the timeline in nanoseconds."
+    },
+    "events": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/pose_event"}
+    }
+  },
+  "$defs": {
+    "pose_event": {
+      "type": "object",
+      "required": ["t_ns", "asset"],
+      "additionalProperties": false,
+      "properties": {
+        "t_ns": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Time at which the asset is fully reached, in nanoseconds."
+        },
+        "asset": {
+          "type": "string",
+          "description": "Name of the pose asset (an action inside the model .blend)."
+        },
+        "kind": {
+          "enum": ["pose", "action"],
+          "description": "'pose' for single-frame assets, 'action' for multi-frame ones."
+        },
+        "blend_ns": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Duration of the transition that ends at t_ns."
+        },
+        "duration_ns": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "For 'action' events, playback length after t_ns."
+        },
+        "source_frames": {
+          "type": "array",
+          "description": "For 'action' events, the asset's own [first, last] frame range.",
+          "prefixItems": [
+            {"type": "integer", "title": "first"},
+            {"type": "integer", "title": "last"}
+          ],
+          "minItems": 2,
+          "maxItems": 2
+        }
+      }
+    }
+  }
+}
