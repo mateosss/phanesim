@@ -44,9 +44,7 @@ class TestPoseEvent:
         assert "source_frames" not in data
 
     def test_action_event_keeps_action_fields(self):
-        event = PoseEvent(
-            t_ns=1000, asset="Wave_Animation", kind="action", duration_ns=500, source_frames=(1, 41)
-        )
+        event = PoseEvent(t_ns=1000, asset="Wave_Animation", kind="action", duration_ns=500, source_frames=(1, 41))
         data = event.to_dict()
         assert data["duration_ns"] == 500
         assert data["source_frames"] == [1, 41]
@@ -85,9 +83,7 @@ class TestSamplePoseMotion:
 
     def test_min_gap_is_respected(self):
         min_gap = 2 * NS_PER_SECOND
-        motion = sample_pose_motion(
-            POSES, 120 * NS_PER_SECOND, seed=11, min_gap_ns=min_gap, events_per_second=50.0
-        )
+        motion = sample_pose_motion(POSES, 120 * NS_PER_SECOND, seed=11, min_gap_ns=min_gap, events_per_second=50.0)
         # A high rate would otherwise pack events far tighter than min_gap.
         gaps = [b.t_ns - a.end_ns for a, b in itertools.pairwise(motion.events)]
         assert all(g >= min_gap for g in gaps), gaps

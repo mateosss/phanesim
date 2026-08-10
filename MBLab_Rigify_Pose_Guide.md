@@ -22,6 +22,7 @@ Bone-heat automatic weights cannot solve on it - it fails and leaves empty `DEF-
 outside the head, frozen at rest.
 ⚠ Eyelashes can explode into 100+ loose fragments (here: 136). Join them back into one object.
 
+
 ## 3. Fit the metarig (in Blender 5.x)
 `Add → Armature → Human (Meta-Rig)` → scale to height → `Ctrl+A` Apply Scale →
 X-ray on → Edit Mode → X-Axis Mirror on → snap spine, one arm (+fingers), one leg.
