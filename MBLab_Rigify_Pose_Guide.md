@@ -1,3 +1,8 @@
+<!--
+Copyright 2026, Yutong Wan.
+SPDX-License-Identifier: BSD-3-Clause
+-->
+
 # MB-Lab → Rigify → Pose Library
 
 Pipeline notes for phanesim. ⚠ = things that cost time.

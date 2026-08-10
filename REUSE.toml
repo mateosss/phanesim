@@ -8,13 +8,23 @@ path = ["data/hand.blend", "data/textures/**"]
 SPDX-FileCopyrightText = "Manuel Bastioni, MB-Lab contributors"
 SPDX-License-Identifier = "AGPL-3.0-only"
 
+# Derivative works: bodies generated from the MB-Lab base meshes, then rigged,
+# posed and materialled by Yutong Wan.  See MBLab_Rigify_Pose_Guide.md for the
+# pipeline.  Both the upstream and the derivative authorship are recorded.
+[[annotations]]
+path = ["data/cmale1.blend", "data/cfemale1.blend"]
+SPDX-FileCopyrightText = ["Manuel Bastioni, MB-Lab contributors", "2026 Yutong Wan"]
+SPDX-License-Identifier = "AGPL-3.0-only"
+
 [[annotations]]
 path = "data/hdri/**"
 SPDX-FileCopyrightText = "Sergej Majboroda"
 SPDX-License-Identifier = "CC0-1.0"
 
+# Covers every sequence directory, including the generated animation
+# descriptions, so new sequences need no further annotation.
 [[annotations]]
-path = "data/sequences/minimal/**"
+path = "data/sequences/**"
 SPDX-FileCopyrightText = "2026 Yutong Wan"
 SPDX-License-Identifier = "BSD-3-Clause"
 
