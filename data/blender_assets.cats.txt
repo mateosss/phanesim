@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Yutong Wan
+# SPDX-License-Identifier: BSD-3-Clause
+#
 # This is an Asset Catalog Definition file for Blender.
 #
 # Empty lines and lines starting with `#` will be ignored.

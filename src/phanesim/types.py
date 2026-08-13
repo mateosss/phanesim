@@ -9,7 +9,11 @@ from pathlib import Path
 
 import numpy as np
 import numpy.typing as npt
-from scipy.spatial.transform import RigidTransform as Transform  # noqa: F401
+from scipy.spatial.transform import RigidTransform
+
+# Re-exported under the project's own name so the rest of the package depends on
+# phanesim.types rather than on scipy directly.
+Transform = RigidTransform
 
 type Scalar = np.float32
 type Timestamp = np.int64
