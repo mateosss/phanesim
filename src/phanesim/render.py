@@ -53,12 +53,7 @@ from scipy.spatial.transform import Rotation
 
 from phanesim.posemotion import NS_PER_SECOND, PoseAsset, PoseMotion
 from phanesim.rig import BodySequence, Project, Sequence
-from phanesim.skeleton import (  # noqa: F401
-    HAND_CONNECTIONS,
-    HAND_LANDMARKS,
-    LANDMARK_COLORS,
-    rigify_hand_landmarks,
-)
+from phanesim.skeleton import HAND_LANDMARKS, rigify_hand_landmarks
 from phanesim.types import Camera, CameraModel, HeadCamera, Shutter, Transform, Vector3
 
 # 180° rotation around X: converts OpenCV camera frame to Blender camera frame.
