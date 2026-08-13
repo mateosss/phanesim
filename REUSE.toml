@@ -33,6 +33,14 @@ path = "src/phanesim/schemas/**"
 SPDX-FileCopyrightText = "2026 Yutong Wan"
 SPDX-License-Identifier = "BSD-3-Clause"
 
+# Asset Browser catalog definitions. Blender stores these beside the .blend
+# files rather than inside them, so the sidecar must be version-controlled or
+# the pose folders are lost.
+[[annotations]]
+path = "data/blender_assets.cats.txt"
+SPDX-FileCopyrightText = "2026 Yutong Wan"
+SPDX-License-Identifier = "BSD-3-Clause"
+
 [[annotations]]
 path = ["main.blend", "pyrightconfig.json", "uv.lock"]
 SPDX-FileCopyrightText = "2026 Yutong Wan"
