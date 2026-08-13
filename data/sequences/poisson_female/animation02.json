@@ -1,0 +1,39 @@
+{
+  "name": "animation02",
+  "model": "data/cfemale1.blend",
+  "seed": 1348781637,
+  "events_per_second": 0.4,
+  "duration_ns": 20000000000,
+  "events": [
+    {
+      "t_ns": 0,
+      "asset": "Left_ThumbUp",
+      "kind": "pose",
+      "blend_ns": 0
+    },
+    {
+      "t_ns": 3105281514,
+      "asset": "Right_four",
+      "kind": "pose",
+      "blend_ns": 500000000
+    },
+    {
+      "t_ns": 6063396641,
+      "asset": "Left_ThumbUp",
+      "kind": "pose",
+      "blend_ns": 500000000
+    },
+    {
+      "t_ns": 7981253059,
+      "asset": "Right_ThumbUp",
+      "kind": "pose",
+      "blend_ns": 500000000
+    },
+    {
+      "t_ns": 13519736178,
+      "asset": "Right_ok",
+      "kind": "pose",
+      "blend_ns": 500000000
+    }
+  ]
+}
