@@ -74,9 +74,15 @@ def test_validate_camera_valid(tmp_path):
 
 
 def test_validate_camera_missing_required(tmp_path):
-    bad = {k: v for k, v in _CAMERA.items() if k != "frequency"}
+    bad = {k: v for k, v in _CAMERA.items() if k != "resolution"}
     with pytest.raises(jsonschema.ValidationError):
         validate_camera(_write(tmp_path, bad))
+
+
+def test_validate_camera_frequency_is_optional(tmp_path):
+    # Body sequences declare a frame count instead, so a camera need not state a rate.
+    ok = {k: v for k, v in _CAMERA.items() if k != "frequency"}
+    validate_camera(_write(tmp_path, ok))
 
 
 def test_validate_camera_wrong_shutter(tmp_path):

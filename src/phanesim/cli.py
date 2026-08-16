@@ -18,7 +18,8 @@ from PIL import Image, ImageDraw
 
 import phanesim.validate as val
 from phanesim.posemotion import (
-    DEFAULT_EVENTS_PER_SECOND,
+    DEFAULT_DURATION_SECONDS,
+    DEFAULT_EVENT_COUNT,
     NS_PER_SECOND,
     PoseAsset,
     sample_pose_motion,
@@ -222,6 +223,13 @@ def validate(kind: str, input_path: Path) -> None:
     help="Path to the Blender executable. Auto-detected as 'blender5' or 'blender' if not set.",
 )
 @click.option(
+    "--frames",
+    default=None,
+    type=int,
+    help="How many frames to render, spread evenly across the whole motion. "
+    "2 gives the first and last frame. Overrides the sequence's own 'frames'.",
+)
+@click.option(
     "--debug_kps",
     is_flag=True,
     default=False,
@@ -237,6 +245,7 @@ def generate(
     input_path: Path,
     output_path: Path,
     blender_bin: str | None,
+    frames: int | None,
     debug_kps: bool,
 ) -> None:
     """Render a sequence or project by driving Blender headlessly.
@@ -253,12 +262,16 @@ def generate(
         "body_sequence": ("BodySequence", "render_body_sequence"),
     }
     cls_name, fn_name = loaders[kind]
+    if frames is not None and kind != "body_sequence":
+        click.echo("Error: --frames is only supported for body_sequence.", err=True)
+        sys.exit(1)
+    extra = f", frames={frames!r}" if frames is not None else ""
     expr = (
         _sys_path_setup()
         + "from pathlib import Path; "
         + f"from phanesim.rig import {cls_name}; "
         + f"from phanesim.render import {fn_name}; "
-        + f"{fn_name}({cls_name}.from_path(Path({input_abs!r})), Path({output_abs!r}))"
+        + f"{fn_name}({cls_name}.from_path(Path({input_abs!r})), Path({output_abs!r}){extra})"
     )
 
     returncode = _run_blender(expr, blender_bin)
@@ -285,15 +298,21 @@ def generate(
     help="Directory the animation JSON files are written to.",
 )
 @click.option("--count", default=1, show_default=True, help="Number of animation descriptions to generate.")
-@click.option("--duration", default=20.0, show_default=True, help="Length of each animation in seconds.")
 @click.option(
-    "--events-per-second",
-    default=DEFAULT_EVENTS_PER_SECOND,
+    "--duration",
+    default=DEFAULT_DURATION_SECONDS,
     show_default=True,
-    help="Rate of the Poisson process; higher means busier motion.",
+    help="Length of each animation in seconds.",
+)
+@click.option(
+    "--events",
+    "event_count",
+    default=DEFAULT_EVENT_COUNT,
+    show_default=True,
+    help="Exact number of poses per animation, including the one at t=0.",
 )
 @click.option("--blend", default=0.5, show_default=True, help="Transition duration into each pose, in seconds.")
-@click.option("--min-gap", default=1.5, show_default=True, help="Minimum seconds between two pose events.")
+@click.option("--rest-asset", default=None, help="Pose to key at t=0. Defaults to a random one.")
 @click.option(
     "--seed",
     default=None,
@@ -314,19 +333,19 @@ def generate_motion(
     output_dir: Path,
     count: int,
     duration: float,
-    events_per_second: float,
+    event_count: int,
     blend: float,
-    min_gap: float,
+    rest_asset: str | None,
     seed: int | None,
     prefix: str,
     blender_bin: str | None,
 ) -> None:
     """Generate random pose motion descriptions from a model's pose assets.
 
-    Writes animation01.json, animation02.json, ... — each a timeline saying which
-    pose is reached at which time, drawn from a Poisson process so every run
-    differs.  The descriptions hold no bone data; the poses themselves stay in
-    the .blend and are resolved when `phanesim generate body_sequence` renders.
+    You say how many poses and over how long — four poses in one second, ten in
+    twenty seconds — and only which poses and when they land are random.  Writes
+    animation01.json, animation02.json, ... ; the descriptions hold no bone data,
+    so the poses stay in the .blend until `phanesim generate body_sequence` runs.
 
     Blender is launched once to enumerate the pose assets, then all the
     timelines are sampled in-process.
@@ -362,15 +381,16 @@ def generate_motion(
             assets,
             duration_ns=int(duration * NS_PER_SECOND),
             name=name,
-            events_per_second=events_per_second,
+            event_count=event_count,
             blend_ns=int(blend * NS_PER_SECOND),
-            min_gap_ns=int(min_gap * NS_PER_SECOND),
             seed=None if seed is None else seed + i,
             model=str(model_path),
+            rest_asset=rest_asset,
         )
         out_path = output_dir / f"{name}.json"
         motion.write(out_path)
-        click.echo(f"  {out_path}  ({len(motion.events)} events, seed={motion.seed})")
+        click.echo(f"  {out_path}")
+        click.echo(f"    {motion.event_count} poses over {duration:g} s  (seed={motion.seed})")
         click.echo(motion.summary())
 
     click.echo(f"[phanesim] Wrote {count} animation description(s) to {output_dir}")
@@ -388,6 +408,13 @@ def generate_motion(
     help="Path for the saved .blend file.",
 )
 @click.option(
+    "--frames",
+    default=None,
+    type=int,
+    help="How many frames to render, spread evenly across the whole motion. "
+    "2 gives the first and last frame. Overrides the sequence's own 'frames'.",
+)
+@click.option(
     "--blender",
     "blender_bin",
     default=None,
@@ -395,7 +422,7 @@ def generate_motion(
     show_envvar=True,
     help="Path to the Blender executable (default: 'blender' on PATH).",
 )
-def preview(kind: str, input_path: Path, output_blend: Path, blender_bin: str | None) -> None:
+def preview(kind: str, input_path: Path, output_blend: Path, frames: int | None, blender_bin: str | None) -> None:
     """Bake a sequence as keyframes and save the result as a .blend file.
 
     Runs Blender headlessly to bake the animation, then prints the path to the
@@ -409,12 +436,13 @@ def preview(kind: str, input_path: Path, output_blend: Path, blender_bin: str | 
     cls_name, fn_name = (
         ("BodySequence", "preview_body_sequence") if kind == "body_sequence" else ("Sequence", "preview_sequence")
     )
+    pv_extra = f", frames={frames!r}" if frames is not None and kind == "body_sequence" else ""
     expr = (
         _sys_path_setup()
         + "from pathlib import Path; "
         + f"from phanesim.rig import {cls_name}; "
         + f"from phanesim.render import {fn_name}; "
-        + f"{fn_name}({cls_name}.from_path(Path({input_abs!r})), {blend_out!r})"
+        + f"{fn_name}({cls_name}.from_path(Path({input_abs!r})), {blend_out!r}{pv_extra})"
     )
 
     click.echo("Baking keyframes (headless)...")

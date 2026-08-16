@@ -81,22 +81,38 @@ class TestSamplePoseMotion:
         assert motion.events[0].t_ns == 0
         assert motion.events[0].blend_ns == 0
 
-    def test_min_gap_is_respected(self):
-        min_gap = 2 * NS_PER_SECOND
-        motion = sample_pose_motion(POSES, 120 * NS_PER_SECOND, seed=11, min_gap_ns=min_gap, events_per_second=50.0)
-        # A high rate would otherwise pack events far tighter than min_gap.
-        gaps = [b.t_ns - a.end_ns for a, b in itertools.pairwise(motion.events)]
-        assert all(g >= min_gap for g in gaps), gaps
+    @pytest.mark.parametrize("n", [1, 2, 4, 10, 50])
+    def test_event_count_is_exact(self, n):
+        # The headline guarantee: ask for n poses, get exactly n.
+        motion = sample_pose_motion(POSES, 20 * NS_PER_SECOND, seed=11, event_count=n)
+        assert motion.event_count == n
+        assert len(motion.events) == n
 
-    def test_higher_rate_gives_more_events(self):
-        slow = sample_pose_motion(POSES, 300 * NS_PER_SECOND, seed=9, events_per_second=0.1)
-        fast = sample_pose_motion(POSES, 300 * NS_PER_SECOND, seed=9, events_per_second=0.6)
-        assert len(fast.events) > len(slow.events)
+    def test_four_poses_in_one_second(self):
+        # The case that motivated the redesign; no minimum spacing stands in the way.
+        motion = sample_pose_motion(POSES, NS_PER_SECOND, seed=1, event_count=4)
+        assert motion.event_count == 4
+        assert all(0 <= e.t_ns <= NS_PER_SECOND for e in motion.events)
 
-    def test_action_duration_occupies_timeline(self):
-        motion = sample_pose_motion([WAVE], 60 * NS_PER_SECOND, seed=4, min_gap_ns=NS_PER_SECOND)
+    def test_blend_never_exceeds_the_preceding_gap(self):
+        # Poses may land close together; a transition longer than its gap would
+        # start before the previous pose was reached.
+        motion = sample_pose_motion(POSES, 2 * NS_PER_SECOND, seed=4, event_count=40, blend_ns=NS_PER_SECOND // 2)
         for prev, nxt in itertools.pairwise(motion.events):
-            assert nxt.t_ns >= prev.end_ns
+            assert nxt.blend_ns <= nxt.t_ns - prev.t_ns
+
+    def test_action_playback_is_clipped_to_its_gap(self):
+        motion = sample_pose_motion([WAVE], 4 * NS_PER_SECOND, seed=4, event_count=20)
+        for prev, nxt in itertools.pairwise(motion.events):
+            assert prev.end_ns <= nxt.t_ns
+
+    def test_event_count_below_one_rejected(self):
+        with pytest.raises(ValueError, match="event_count must be at least 1"):
+            sample_pose_motion(POSES, 10 * NS_PER_SECOND, event_count=0)
+
+    def test_unknown_rest_asset_rejected(self):
+        with pytest.raises(ValueError, match="rest_asset"):
+            sample_pose_motion(POSES, 10 * NS_PER_SECOND, rest_asset="Nope")
 
     def test_rest_asset_selects_opening_pose(self):
         motion = sample_pose_motion(POSES, 20 * NS_PER_SECOND, seed=2, rest_asset="Pose_3")

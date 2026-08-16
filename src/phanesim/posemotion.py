@@ -34,10 +34,10 @@ from pathlib import Path
 
 NS_PER_SECOND = 1_000_000_000
 
-# Sampling defaults, matching tools/blender/poisson_animation.py.
-DEFAULT_EVENTS_PER_SECOND = 0.4
+# Sampling defaults, used when the caller asks for neither a count nor a length.
+DEFAULT_EVENT_COUNT = 8
+DEFAULT_DURATION_SECONDS = 20.0
 DEFAULT_BLEND_SECONDS = 0.5
-DEFAULT_MIN_GAP_SECONDS = 1.5
 
 
 @dataclass
@@ -97,12 +97,13 @@ class PoseMotion:
 
     JSON schema:
       {
-        "name":              "<str>",
-        "model":             "<path to the .blend holding the pose assets>",
-        "seed":              <int>,
-        "events_per_second": <float>,
-        "duration_ns":       <int>,
-        "events":            [<PoseEvent dict>, ...]
+        "name":        "<str>",
+        "model":       "<path to the .blend holding the pose assets>",
+        "seed":        <int>,
+        "duration_ns": <int>,
+        "duration_s":  <float>,   -- derived, for reading at a glance
+        "event_count": <int>,     -- derived, equals len(events)
+        "events":      [<PoseEvent dict>, ...]
       }
     """
 
@@ -111,8 +112,11 @@ class PoseMotion:
     duration_ns: int
     model: str | None = None
     seed: int | None = None
-    events_per_second: float = DEFAULT_EVENTS_PER_SECOND
     source: Path | None = field(default=None, compare=False)
+
+    @property
+    def event_count(self) -> int:
+        return len(self.events)
 
     @property
     def t_start_ns(self) -> int:
@@ -133,12 +137,16 @@ class PoseMotion:
         return seen
 
     def to_dict(self) -> dict:
+        # duration_s and event_count are derived from the fields above; they are
+        # written so the file states its own length and size without arithmetic,
+        # and are recomputed on every write rather than trusted on read.
         return {
             "name": self.name,
             "model": self.model,
             "seed": self.seed,
-            "events_per_second": self.events_per_second,
             "duration_ns": int(self.duration_ns),
+            "duration_s": round(self.duration_ns / NS_PER_SECOND, 6),
+            "event_count": self.event_count,
             "events": [e.to_dict() for e in self.events],
         }
 
@@ -155,7 +163,6 @@ class PoseMotion:
             duration_ns=int(data["duration_ns"]),
             model=data.get("model"),
             seed=data.get("seed"),
-            events_per_second=float(data.get("events_per_second", DEFAULT_EVENTS_PER_SECOND)),
             source=source,
         )
 
@@ -225,74 +232,87 @@ def sample_pose_motion(
     duration_ns: int,
     *,
     name: str = "animation",
-    events_per_second: float = DEFAULT_EVENTS_PER_SECOND,
+    event_count: int = DEFAULT_EVENT_COUNT,
     blend_ns: int = int(DEFAULT_BLEND_SECONDS * NS_PER_SECOND),
-    min_gap_ns: int = int(DEFAULT_MIN_GAP_SECONDS * NS_PER_SECOND),
     seed: int | None = None,
     model: str | None = None,
     rest_asset: str | None = None,
 ) -> PoseMotion:
-    """Draw a random pose timeline from a Poisson process.
+    """Place exactly *event_count* poses at random times within *duration_ns*.
 
-    Gesture events arrive as a Poisson process of rate *events_per_second*, so the
-    gaps between them are exponentially distributed and memoryless — the same
-    statistics as spontaneous, unscheduled hand movement.  Each gap is floored at
-    *min_gap_ns* so poses stay legible instead of stacking on top of each other.
+    The count and the length are both given, so a request reads directly: four
+    poses in one second, ten poses in twenty seconds.  Only *which* poses and
+    *when* they land are random.
+
+    This is still a Poisson process, conditioned on its event count.  A Poisson
+    process observed to produce n arrivals in [0, T] has those arrivals
+    distributed exactly as the order statistics of n independent uniform draws on
+    [0, T] — so drawing uniforms and sorting them is not an approximation of the
+    process, it is the process with its count fixed.
+
+    The first pose is keyed at t=0 and counts toward *event_count*, so the
+    timeline never opens mid-interpolation; the remaining ones fall anywhere in
+    (0, duration_ns].  There is no minimum spacing: poses may land arbitrarily
+    close together, and each transition is shortened to fit the gap it has.
 
     Args:
-        assets:            Pose assets available to draw from.
-        duration_ns:       Length of the timeline in nanoseconds.
-        name:              Name recorded in the description.
-        events_per_second: Poisson rate; higher means busier motion.
-        blend_ns:          Transition duration into each pose.
-        min_gap_ns:        Lower bound applied to every sampled gap.
-        seed:              Seed for reproducibility; None draws a random one.
-        model:             Path to the .blend the assets came from, recorded for reference.
-        rest_asset:        Asset to key at t=0; defaults to the first static pose.
+        assets:      Pose assets available to draw from.
+        duration_ns: Length of the timeline in nanoseconds.
+        name:        Name recorded in the description.
+        event_count: Exact number of poses, including the one at t=0.
+        blend_ns:    Requested transition duration; clipped to the preceding gap.
+        seed:        Seed for reproducibility; None draws a random one.
+        model:       Path to the .blend the assets came from, recorded for reference.
+        rest_asset:  Asset to key at t=0; defaults to a random one.
 
     Returns:
-        A PoseMotion whose events are sorted by time.
+        A PoseMotion with exactly *event_count* events, sorted by time.
 
     Raises:
-        ValueError: If *assets* is empty or *duration_ns* is not positive.
+        ValueError: If *assets* is empty, *duration_ns* is not positive, or
+            *event_count* is less than one.
     """
     if not assets:
         raise ValueError("no pose assets to sample from")
     if duration_ns <= 0:
         raise ValueError(f"duration_ns must be positive, got {duration_ns}")
+    if event_count < 1:
+        raise ValueError(f"event_count must be at least 1, got {event_count}")
 
     if seed is None:
         seed = random.randrange(2**31)
     rng = random.Random(seed)
 
-    events: list[PoseEvent] = []
-
-    # Key a starting pose at t=0 so the timeline does not open mid-interpolation.
-    static = [a for a in assets if not a.is_action]
-    start_name = rest_asset or (static[0].name if static else assets[0].name)
-    start = next((a for a in assets if a.name == start_name), assets[0])
-    events.append(PoseEvent(t_ns=0, asset=start.name, kind=start.kind, blend_ns=0))
-
-    t_ns = 0
-    while True:
-        gap_ns = max(int(rng.expovariate(events_per_second) * NS_PER_SECOND), min_gap_ns)
-        t_ns += gap_ns
-        if t_ns > duration_ns:
-            break
-
-        asset = rng.choice(assets)
-        events.append(
-            PoseEvent(
-                t_ns=t_ns,
-                asset=asset.name,
-                kind=asset.kind,
-                blend_ns=blend_ns,
-                duration_ns=asset.duration_ns,
-                source_frames=(asset.frame_start, asset.frame_end) if asset.is_action else None,
-            )
+    def make(t_ns: int, asset: PoseAsset, blend: int) -> PoseEvent:
+        return PoseEvent(
+            t_ns=t_ns,
+            asset=asset.name,
+            kind=asset.kind,
+            blend_ns=blend,
+            duration_ns=asset.duration_ns,
+            source_frames=(asset.frame_start, asset.frame_end) if asset.is_action else None,
         )
-        # A multi-frame asset occupies the timeline while it plays.
-        t_ns += asset.duration_ns
+
+    # The opening pose is keyed at t=0 with no transition into it.
+    start = next((a for a in assets if a.name == rest_asset), None) if rest_asset else rng.choice(assets)
+    if start is None:
+        raise ValueError(f"rest_asset {rest_asset!r} is not among the available assets")
+    events = [make(0, start, 0)]
+
+    # Order statistics of uniform draws: the arrival times of the conditioned process.
+    for t_ns in sorted(rng.randrange(1, duration_ns + 1) for _ in range(event_count - 1)):
+        events.append(make(t_ns, rng.choice(assets), blend_ns))
+
+    # Fit each event into the gap it actually got.  Without a minimum spacing two
+    # poses can land close together, and a transition longer than the gap would
+    # otherwise start before the previous pose was reached.
+    for i, event in enumerate(events):
+        following = events[i + 1].t_ns if i + 1 < len(events) else duration_ns
+        gap = max(0, following - event.t_ns)
+        if event.kind == "action":
+            event.duration_ns = min(event.duration_ns, gap)
+        if i > 0:
+            event.blend_ns = min(event.blend_ns, event.t_ns - events[i - 1].t_ns)
 
     return PoseMotion(
         name=name,
@@ -300,5 +320,4 @@ def sample_pose_motion(
         duration_ns=duration_ns,
         model=model,
         seed=seed,
-        events_per_second=events_per_second,
     )

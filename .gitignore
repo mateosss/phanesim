@@ -12,6 +12,9 @@ env/
 
 output*/
 preview*
+data/sequences/minimal
+data/sequences/male/animation*.json
+data/sequences/female/animation*.json
 
 .pytest_cache/
 .ruff_cache/
