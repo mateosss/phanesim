@@ -32,7 +32,7 @@ def _camera_from_dict(data: dict, base_dir: Path) -> Camera:
             parameters=dict(data["intrinsics"]["parameters"]),
         ),
         resolution=(int(w), int(h)),
-        frequency=float(data["frequency"]),
+        frequency=float(data.get("frequency", 10.0)),
         pixel_format=str(data["pixel_format"]),
         shutter=Shutter(data["shutter"]),
         exposure=int(data["exposure"]),
@@ -207,6 +207,7 @@ class BodySequence:
         "output_path":  "<relative-or-absolute path>",
         "body_rig":     <BodyRig dict>,
         "hand_motions": ["<path-to-animation-json>", ...],
+        "frames":       <int>,             -- optional
         "hdri":         "<path>"           -- optional
       }
     """
@@ -215,6 +216,7 @@ class BodySequence:
     output_path: Path
     body_rig: BodyRig
     hand_motions: list[PoseMotion]
+    frames: int | None = None  # frames per motion; None derives them from the camera rate
     hdri: Path | None = None
 
     @classmethod
@@ -224,6 +226,7 @@ class BodySequence:
             output_path=Path(data["output_path"]),
             body_rig=BodyRig.from_dict(data["body_rig"], base_dir),
             hand_motions=[PoseMotion.from_path(base_dir / p) for p in data["hand_motions"]],
+            frames=int(data["frames"]) if data.get("frames") is not None else None,
             hdri=(base_dir / data["hdri"]) if data.get("hdri") else None,
         )
 

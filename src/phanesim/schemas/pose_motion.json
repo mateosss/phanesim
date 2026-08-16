@@ -16,15 +16,20 @@
       "oneOf": [{"type": "null"}, {"type": "integer"}],
       "description": "Seed of the random draw; re-running with this seed reproduces the timeline."
     },
-    "events_per_second": {
-      "type": "number",
-      "exclusiveMinimum": 0,
-      "description": "Rate of the Poisson process that produced the event times."
-    },
     "duration_ns": {
       "type": "integer",
       "exclusiveMinimum": 0,
       "description": "Length of the timeline in nanoseconds."
+    },
+    "duration_s": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "description": "Derived: duration_ns expressed in seconds, for reading at a glance."
+    },
+    "event_count": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Derived: number of poses in the timeline, including the one at t=0."
     },
     "events": {
       "type": "array",

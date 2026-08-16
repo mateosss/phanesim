@@ -3,20 +3,14 @@
 
 """Blender EEVEE rendering pipeline for Phanesim sequences.
 
-Two motion sources are supported, sharing the same lighting, compositor,
-projection and output code:
-
-- **Sequence** (render_sequence) — the standalone hand rig, posed per joint from
-  motion CSVs, with the camera trajectory read from a camera motion CSV.
-- **BodySequence** (render_body_sequence) — the full-body rig, posed by blending
-  named pose assets stored in the model .blend according to a pose motion
-  description, with the camera derived from the head bone every frame.
+A BodySequence is rendered by blending named pose assets stored in the model
+.blend according to a pose motion description, with the camera derived from the
+head bone every frame.
 
 Coordinate system assumptions
 ------------------------------
 - World frame: right-handed, Z-up (matches Blender's default world).
-- Camera motion CSV gives T_world_body: body/head pose in world frame.
-- Hand motion CSV gives joint poses in world frame (absolute world positions).
+- Body joint positions are read from the posed armature in world frame.
 - Camera intrinsics use the OpenCV convention: X right, Y down, Z forward.
 - Blender's camera local frame: X right, Y up, Z backward (looks along -Z).
   A 180° rotation around X converts OpenCV→Blender camera orientation.
@@ -30,7 +24,7 @@ Output layout per sequence
       ...
       joints_2d.csv   -- columns: timestamp, {hand}_{joint}_u, {hand}_{joint}_v, ...
 
-A BodySequence listing several motions renders each as its own take into
+A sequence listing several motions renders each as its own take into
 <output_path>/<motion name>/ instead.
 
 This module must run inside Blender's Python interpreter (provides bpy/mathutils).
@@ -42,7 +36,6 @@ from __future__ import annotations
 import csv
 import json
 import math
-import os
 from pathlib import Path
 
 import bpy  # pyright: ignore[reportMissingImports]
@@ -52,19 +45,12 @@ import numpy.typing as npt
 from scipy.spatial.transform import Rotation
 
 from phanesim.posemotion import NS_PER_SECOND, PoseAsset, PoseMotion
-from phanesim.rig import BodySequence, Project, Sequence
-from phanesim.skeleton import HAND_LANDMARKS, rigify_hand_landmarks
-from phanesim.types import Camera, CameraModel, HeadCamera, Shutter, Transform, Vector3
+from phanesim.rig import BodySequence
+from phanesim.skeleton import rigify_hand_landmarks
+from phanesim.types import Camera, CameraModel, HeadCamera, Shutter, Timestamps, Transform, Vector3
 
 # 180° rotation around X: converts OpenCV camera frame to Blender camera frame.
 _OPENCV_TO_BLENDER_CAM = mathutils.Matrix.Rotation(math.pi, 4, "X")
-
-# The hand.blend armature has rotation_mode='QUATERNION' with a baked base
-# quaternion of 180° around -Z (w=0, z=-1).  Wrist CSV rotations are composed
-# with this base so CSV identity preserves the rest-pose appearance.
-# NOTE: this constant is specific to hand.blend; a different rig may need a
-# different value.  Future work: read it from the blend file at load time.
-_ARM_BASE_QUAT = mathutils.Quaternion((0.0, 0.0, 0.0, -1.0))
 
 
 # ---------------------------------------------------------------------------
@@ -100,275 +86,64 @@ def project_point(p_cam: Vector3, model: CameraModel) -> tuple[float, float]:
     raise ValueError(f"Unsupported camera model: {model.name!r}. Supported: pinhole, kb4.")
 
 
+def distort_pixel(
+    x: float,
+    y: float,
+    width: int,
+    height: int,
+    distortion: float,
+    scale: float = 1.0,
+) -> tuple[float, float]:
+    """Map an undistorted pixel to where the compositor puts it.
+
+    Blender's Lens Distortion node is a *gather*: it says which input pixel each
+    output pixel reads from.  Ground truth needs the opposite direction — given a
+    projected landmark in the undistorted render, where does it appear in the
+    written image — so this is the forward map.
+
+    The relation was measured against Blender's CPU compositor rather than
+    derived, because the GPU shader in Blender's source implements a different
+    parameterisation than the CPU path that headless renders actually use.
+    Fitting a grid of known points at several distortion values gives, in
+    coordinates normalised about the image centre::
+
+        r_out = r_in * (1 + k) / (1 + k * r_in^2)
+
+    which reproduces Blender's output to ~0.1 px for k up to 0.4, and is exactly
+    the identity at k = 0.  Note the normalisation divides x by width/2 and y by
+    height/2, and is centred on the image centre — not on the intrinsics
+    principal point, which the compositor knows nothing about.
+
+    Args:
+        x, y:       Pixel coordinates in the undistorted image.
+        width:      Image width in pixels.
+        height:     Image height in pixels.
+        distortion: The node's Distortion input.
+        scale:      Uniform scale applied by the Transform node after distortion,
+                    used to crop the borders the distortion opens up.
+
+    Returns:
+        The pixel coordinates in the written image.
+    """
+    half_w = width / 2.0
+    half_h = height / 2.0
+
+    # Blender samples at pixel centres, hence the half-pixel offsets.
+    xn = (x + 0.5 - half_w) / half_w
+    yn = (y + 0.5 - half_h) / half_h
+
+    r2 = xn * xn + yn * yn
+    factor = (1.0 + distortion) / (1.0 + distortion * r2) * scale
+
+    return (
+        xn * factor * half_w + half_w - 0.5,
+        yn * factor * half_h + half_h - 0.5,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Blender scene helpers
 # ---------------------------------------------------------------------------
-
-
-def _set_hand_bones(arm_obj: bpy.types.Object, joint_names: list[str], joint_poses: list[Transform]) -> None:
-    """Position the armature and apply wrist rotation from the CSV.
-
-    The CSV wrist quaternion is relative to the blend file's baked base orientation
-    (_ARM_BASE_QUAT).  Total rotation = _ARM_BASE_QUAT @ q_csv, so CSV identity
-    preserves the original rest-pose look (back of hand visible from above), while
-    a 180° Z CSV rotation flips to show the palm (pronation/supination).
-
-    The armature object location is recalculated each frame so the Wrist bone
-    stays exactly at the CSV world position regardless of rotation.
-    Non-wrist joints named in the CSV are driven by applying their quaternion
-    directly as matrix_basis (bone-local rotation relative to rest pose).
-    Finger flexion is rotation around each bone's local X axis.
-    """
-    # Reset all pose bones to rest pose.
-    for pb in arm_obj.pose.bones:
-        pb.matrix_basis = mathutils.Matrix.Identity(4)
-
-    wrist_idx = next((i for i, n in enumerate(joint_names) if n.lower() == "wrist"), None)
-    if wrist_idx is None:
-        return
-
-    world_wrist = mathutils.Vector(joint_poses[wrist_idx].translation.tolist())
-
-    # Compose: blend-file base orientation + CSV relative rotation.
-    # CSV identity keeps the original rest-pose look (back of hand up);
-    # CSV 180° around Z flips to show the palm.
-    # scipy as_quat() → [x, y, z, w]; Blender Quaternion → [w, x, y, z].
-    q = joint_poses[wrist_idx].rotation.as_quat()
-    q_csv = mathutils.Quaternion((q[3], q[0], q[1], q[2]))
-    q_total = _ARM_BASE_QUAT @ q_csv
-
-    arm_obj.rotation_mode = "QUATERNION"
-    arm_obj.rotation_quaternion = q_total
-
-    # Keep Wrist bone at CSV world position: location = world_wrist - R @ rest_head.
-    rest_head = mathutils.Vector(arm_obj.data.bones["Wrist"].head_local)
-    arm_obj.location = world_wrist - q_total.to_matrix() @ rest_head
-
-    # Apply per-finger bone rotations from the CSV.
-    # For non-wrist joints the CSV quaternion is interpreted as bone-local rotation
-    # (i.e. directly as matrix_basis).  matrix_basis identity = rest pose, so
-    # bending is expressed as a rotation relative to rest; no base-quat composition
-    # needed here, unlike the whole-armature wrist rotation above.
-    # Flexion (curling toward palm) is rotation around each bone's local X axis.
-    for i, name in enumerate(joint_names):
-        if name.lower() == "wrist":
-            continue
-        pb = arm_obj.pose.bones.get(name)
-        if pb is None:
-            # Case-insensitive fallback.
-            pb = next((b for b in arm_obj.pose.bones if b.name.lower() == name.lower()), None)
-        if pb is None:
-            continue
-        q = joint_poses[i].rotation.as_quat()  # [x, y, z, w]
-        pb.matrix_basis = mathutils.Quaternion((q[3], q[0], q[1], q[2])).to_matrix().to_4x4()
-
-
-def _load_hand_model(hand_model_path: Path) -> bpy.types.Object:
-    """Append all objects from a .blend file and return the first Armature.
-
-    The armature (and its parented mesh) is moved to the world origin so that
-    bone matrices in armature-local space equal world-space transforms.  This
-    lets the hand-motion CSV supply plain world-space joint positions.
-    """
-    # Remove Blender factory-startup objects (Cube, Camera, Light) so they
-    # don't appear in renders or receive the PBR skin texture.
-    for obj in list(bpy.context.scene.objects):
-        if obj.name in ("Cube", "Camera", "Light"):
-            bpy.data.objects.remove(obj, do_unlink=True)
-
-    with bpy.data.libraries.load(str(hand_model_path), link=False) as (src, dst):
-        dst.objects = [name for name in src.objects]  # type: ignore[assignment]
-    arm_obj: bpy.types.Object | None = None
-    for obj in dst.objects:  # type: ignore[attr-defined]
-        bpy.context.collection.objects.link(obj)
-        if obj.type == "ARMATURE" and arm_obj is None:
-            arm_obj = obj
-    if arm_obj is None:
-        raise RuntimeError(f"No armature found in hand model: {hand_model_path}")
-
-    # Normalize: move armature to world origin; parented meshes follow automatically.
-    arm_obj.location = mathutils.Vector((0.0, 0.0, 0.0))
-    arm_obj.rotation_euler = mathutils.Euler((0.0, 0.0, 0.0), "XYZ")
-    arm_obj.scale = mathutils.Vector((1.0, 1.0, 1.0))
-
-    # Mute IK constraints so that manual bone posing via matrix_basis is not
-    # overridden by the IK solver pulling bones toward its embedded targets.
-    for pb in arm_obj.pose.bones:
-        for constraint in pb.constraints:
-            if constraint.type == "IK":
-                constraint.mute = True
-
-    apply_hand_textures(str(hand_model_path))
-    return arm_obj
-
-
-# ---------------------------------------------------------------------------
-# The texture application (temporary, will be replaced by a more robust material system in the future)
-# ---------------------------------------------------------------------------
-
-# Maps a PBR role to filename keywords that identify it.
-_TEXTURE_KEYWORDS: dict[str, list[str]] = {
-    "albedo": ["albedo", "diffuse", "color", "basecolor", "base_color"],
-    "normal": ["normal", "bump", "nrm"],
-    "roughness": ["roughness", "rough"],
-    "displacement": ["displacement", "disp", "height"],
-    "thickness": ["thickness", "thick", "sss"],
-}
-
-_TEXTURE_EXTS = {".png", ".jpg", ".jpeg", ".tiff", ".tga", ".exr"}
-
-
-def _find_textures_in_dir(directory: str) -> dict[str, str]:
-    """Scan *directory* for PBR texture files and return a role→absolute-path map."""
-    texture_map: dict[str, str] = {}
-    for fname in os.listdir(directory):
-        if os.path.splitext(fname)[1].lower() not in _TEXTURE_EXTS:
-            continue
-        fname_lower = fname.lower()
-        for role, keywords in _TEXTURE_KEYWORDS.items():
-            if role not in texture_map and any(kw in fname_lower for kw in keywords):
-                texture_map[role] = os.path.join(directory, fname)
-                break
-    return texture_map
-
-
-def _apply_pbr_material(obj: bpy.types.Object, texture_map: dict[str, str]) -> None:
-    """Replace all materials on *obj* with a freshly built Principled BSDF material."""
-    mat = bpy.data.materials.new(name=f"_phanesim_pbr_{obj.name}")
-    mat.use_nodes = True
-    nodes = mat.node_tree.nodes
-    links = mat.node_tree.links
-    nodes.clear()
-
-    out = nodes.new("ShaderNodeOutputMaterial")
-    out.location = (400, 0)
-    bsdf = nodes.new("ShaderNodeBsdfPrincipled")
-    bsdf.location = (0, 0)
-    links.new(bsdf.outputs["BSDF"], out.inputs["Surface"])
-
-    # -----------------------------------------------------------------------
-    # Set Matte Skin Default Values
-    # These apply if textures are missing or act as a base for blending.
-    # -----------------------------------------------------------------------
-
-    # 1. Base skin tone (approximating the image provided)
-    bsdf.inputs["Base Color"].default_value = (0.65, 0.40, 0.30, 1.0)
-
-    # 2. High roughness for a matte, non-glossy finish (0.0 is mirror, 1.0 is flat)
-    bsdf.inputs["Roughness"].default_value = 0.75
-
-    # 3. Lower specular highlights to prevent the "wet plastic" look
-    # (Blender 4.0+ renamed "Specular" to "Specular IOR Level")
-    if "Specular IOR Level" in bsdf.inputs:
-        bsdf.inputs["Specular IOR Level"].default_value = 0.2
-    elif "Specular" in bsdf.inputs:
-        bsdf.inputs["Specular"].default_value = 0.2
-
-    # SSS off by default: EEVEE SSS looks waxy/translucent without proper radius tuning.
-    if "Subsurface Weight" in bsdf.inputs:
-        bsdf.inputs["Subsurface Weight"].default_value = 0.0
-    elif "Subsurface" in bsdf.inputs:
-        bsdf.inputs["Subsurface"].default_value = 0.0
-
-    def _add_tex(role: str, x: float, y: float, color_space: str = "Non-Color") -> bpy.types.Node | None:
-        if role not in texture_map:
-            return None
-        tex = nodes.new("ShaderNodeTexImage")
-        tex.location = (x, y)
-        img = bpy.data.images.load(texture_map[role], check_existing=True)
-        img.colorspace_settings.name = color_space
-        tex.image = img
-        return tex
-
-    albedo = _add_tex("albedo", -600, 300, "sRGB")
-    if albedo:
-        links.new(albedo.outputs["Color"], bsdf.inputs["Base Color"])
-
-    # Roughness map used directly (white=rough, black=smooth — standard PBR convention).
-    rough = _add_tex("roughness", -600, 0)
-    if rough:
-        links.new(rough.outputs["Color"], bsdf.inputs["Roughness"])
-
-    bump = _add_tex("normal", -800, -200)
-    if bump:
-        bump_node = nodes.new("ShaderNodeBump")
-        bump_node.location = (-400, -200)
-        links.new(bump.outputs["Color"], bump_node.inputs["Height"])
-        links.new(bump_node.outputs["Normal"], bsdf.inputs["Normal"])
-
-    # Displacement is skipped: EEVEE does not support true geometry displacement.
-    # The texture is loaded here only so it appears in the node editor for reference.
-    _add_tex("displacement", -600, -450)
-
-    # Thickness texture used as a subtle SSS weight (scaled down to avoid wax look).
-    thick = _add_tex("thickness", -600, 150)
-    if thick:
-        scale = nodes.new("ShaderNodeMath")
-        scale.operation = "MULTIPLY"
-        scale.inputs[1].default_value = 0.08
-        scale.location = (-300, 150)
-        links.new(thick.outputs["Color"], scale.inputs[0])
-        sss_input = bsdf.inputs.get("Subsurface Weight") or bsdf.inputs.get("Subsurface")
-        if sss_input is not None:
-            links.new(scale.outputs["Value"], sss_input)
-
-    obj.data.materials.clear()
-    obj.data.materials.append(mat)
-
-
-def apply_hand_textures(model_file_path: str) -> None:
-    """Build and apply PBR materials to every MESH in the scene.
-
-    Looks for a 'textures' folder next to *model_file_path*, then the folder
-    itself.  Safe to call when no textures are present.
-    """
-    model_dir = os.path.dirname(os.path.abspath(model_file_path))
-    search_dirs = [os.path.join(model_dir, "textures"), model_dir]
-
-    texture_map: dict[str, str] = {}
-    for d in search_dirs:
-        if os.path.isdir(d):
-            texture_map = _find_textures_in_dir(d)
-            if texture_map:
-                print(f"[PBR] Found textures in: {d}")
-                break
-
-    if not texture_map:
-        print(f"[PBR] No textures found near '{model_file_path}'. Hand will render with default material.")
-        return
-
-    print("[PBR] Discovered texture map:")
-    for role, path in texture_map.items():
-        print(f"        {role:12s} -> {os.path.basename(path)}")
-
-    mesh_count = 0
-    for obj in bpy.context.scene.objects:
-        if obj.type == "MESH":
-            _apply_pbr_material(obj, texture_map)
-            mesh_count += 1
-
-    print(f"[PBR] Applied textures to {mesh_count} mesh object(s).")
-
-
-def _add_sun_light() -> tuple[bpy.types.Object, bpy.types.Light]:
-    """Add a sun lamp aimed from the +Y side to illuminate the front of the scene."""
-    light_data: bpy.types.Light = bpy.data.lights.new(name="_phanesim_sun", type="SUN")
-    light_data.energy = 3.0
-    light_obj: bpy.types.Object = bpy.data.objects.new("_phanesim_sun", light_data)
-    # Rotate 90° around X so the sun shines along +Y (from the camera's side).
-    light_obj.rotation_euler = mathutils.Euler((-math.pi / 2, 0.0, 0.0), "XYZ")
-    bpy.context.collection.objects.link(light_obj)
-    return light_obj, light_data
-
-
-def _setup_world_light(scene: bpy.types.Scene) -> None:
-    """Add a soft white ambient world background so unlit surfaces aren't pure black."""
-    world = bpy.data.worlds.new("_phanesim_world")
-    world.use_nodes = True
-    bg = world.node_tree.nodes["Background"]
-    bg.inputs["Color"].default_value = (1.0, 1.0, 1.0, 1.0)
-    bg.inputs["Strength"].default_value = 0.4
-    scene.world = world
 
 
 def _setup_world_hdri(scene: bpy.types.Scene, hdri_path: Path) -> None:
@@ -477,13 +252,12 @@ def _setup_compositor(scene: bpy.types.Scene, camera: Camera) -> None:
 
     # ── 3. Sensor Noise (built-in effect group) ──────────────────────────────
     # noise_std / chroma_noise map directly to the node's [0-1+] inputs.
-    if camera.noise_std > 0.0:
-        noise = _effect("Sensor Noise", (-800, 0))
-        if noise.node_tree:
-            noise.inputs["Luminance Noise"].default_value = camera.noise_std
-            noise.inputs["Chroma Noise"].default_value = camera.chroma_noise
-        links.new(cur, noise.inputs["Image"])
-        cur = noise.outputs["Image"]
+    noise = _effect("Sensor Noise", (-800, 0))
+    if noise.node_tree:
+        noise.inputs["Luminance Noise"].default_value = camera.noise_std
+        noise.inputs["Chroma Noise"].default_value = camera.chroma_noise
+    links.new(cur, noise.inputs["Image"])
+    cur = noise.outputs["Image"]
 
     # ── 4. Barrel Distortion (native node, no Fit — Transform handles crop) ──
     ld = nodes.new("CompositorNodeLensdist")
@@ -577,7 +351,7 @@ def _configure_render(scene: bpy.types.Scene, camera: Camera, cam_obj: bpy.types
     if getattr(camera, "motion_blur", False):
         scene.render.use_motion_blur = True
 
-    scene.eevee.taa_render_samples = 16
+    scene.eevee.taa_render_samples = 8
     if hasattr(scene.eevee, "use_gtao"):
         scene.eevee.use_gtao = False
     if hasattr(scene.eevee, "use_bloom"):
@@ -586,182 +360,9 @@ def _configure_render(scene: bpy.types.Scene, camera: Camera, cam_obj: bpy.types
     _setup_compositor(scene, camera)
 
 
-_HAND_LANDMARKS = HAND_LANDMARKS
-
-
-def _joint_columns(seq: Sequence) -> list[str]:
-    """Return ordered column names for the joints_2d CSV (excluding timestamp).
-
-    One (u, v) pair per MediaPipe landmark per hand — 21 landmarks × 2 = 42 columns
-    per hand.
-    """
-    cols: list[str] = []
-    rig = seq.camhand_rig
-    for h, hand in enumerate(rig.hands):
-        hand_label = hand.name or f"hand{h}"
-        for lm_name, _, _ in _HAND_LANDMARKS:
-            cols.append(f"{hand_label}_{lm_name}_u")
-            cols.append(f"{hand_label}_{lm_name}_v")
-    return cols
-
-
 # ---------------------------------------------------------------------------
 # Sequence rendering
 # ---------------------------------------------------------------------------
-
-
-def render_sequence(seq: Sequence, output_path: Path) -> None:
-    """Render all frames of a Sequence and write images + ground-truth CSVs.
-
-    Scene setup (lighting, hand models) happens once.  For each camera the
-    pipeline has two passes:
-      Pass 1 — bake keyframes for the camera and all hand bones, and collect
-               2D joint projections into memory.
-      Pass 2 — render the full animation in a single bpy.ops call so Blender's
-               render engine is initialised only once per camera.
-
-    Args:
-        seq:         Loaded Sequence object.
-        output_path: Root output directory for this sequence.
-    """
-    scene = bpy.context.scene
-    rig = seq.camhand_rig
-
-    # Determine time range: intersection of all motion trajectory spans.
-    t_start = max(
-        *(m.ts[0] for m in seq.cam_motions),
-        *(m.ts[0] for m in seq.hand_motions),
-    )
-    t_end = min(
-        *(m.ts[-1] for m in seq.cam_motions),
-        *(m.ts[-1] for m in seq.hand_motions),
-    )
-
-    # Add lighting once. HDRI provides full scene lighting on its own; the
-    # sun lamp is only added when no HDRI is configured.
-    sun_obj: bpy.types.Object | None = None
-    sun_data: bpy.types.Light | None = None
-    if seq.hdri:
-        _setup_world_hdri(scene, seq.hdri)
-    else:
-        sun_obj, sun_data = _add_sun_light()
-        _setup_world_light(scene)
-
-    # Load hand models once; keep reference for bone posing.
-    arm_objs: list[bpy.types.Object] = []
-    for hand in rig.hands:
-        arm_objs.append(_load_hand_model(hand.model))
-
-    joint_cols = _joint_columns(seq)
-
-    for c, (camera, cam_motion) in enumerate(zip(rig.cameras, seq.cam_motions, strict=True)):
-        cam_label = camera.name or f"cam{c}"
-        cam_dir = output_path / f"cam_{cam_label}"
-        cam_dir.mkdir(parents=True, exist_ok=True)
-
-        bpy_cam_data: bpy.types.Camera = bpy.data.cameras.new(name=cam_label)
-        cam_obj: bpy.types.Object = bpy.data.objects.new(cam_label, bpy_cam_data)
-        bpy.context.collection.objects.link(cam_obj)
-        _configure_render(scene, camera, cam_obj)
-        cam_obj.rotation_mode = "QUATERNION"
-
-        dt_ns = int(1e9 / camera.frequency)
-        timestamps = np.arange(t_start, t_end + 1, dt_ns, dtype=np.int64)
-        scene.frame_start = 0
-        scene.frame_end = len(timestamps) - 1
-        scene.render.fps = max(1, int(round(camera.frequency)))
-
-        # Pass 1: bake keyframes for camera + hands; collect 2D joint projections.
-        joint_rows: list[list[object]] = []
-        for frame_idx, ts in enumerate(timestamps):
-            T_world_body = cam_motion.get_pose(ts)
-            T_world_cam = T_world_body * camera.T_b_c
-            T_cam_world = T_world_cam.inv()
-
-            mat = mathutils.Matrix(T_world_cam.as_matrix().tolist()) @ _OPENCV_TO_BLENDER_CAM
-            loc, rot, _ = mat.decompose()
-            cam_obj.location = loc
-            cam_obj.rotation_quaternion = rot
-            cam_obj.keyframe_insert(data_path="location", frame=frame_idx)
-            cam_obj.keyframe_insert(data_path="rotation_quaternion", frame=frame_idx)
-
-            row: list[object] = [int(ts)]
-            for h, (hand_motion, arm_obj) in enumerate(zip(seq.hand_motions, arm_objs, strict=True)):
-                joint_poses = hand_motion.get_joint_poses(ts)
-                _set_hand_bones(arm_obj, hand_motion.joint_names, joint_poses)
-                bpy.context.view_layer.update()
-
-                arm_obj.keyframe_insert(data_path="location", frame=frame_idx)
-                arm_obj.keyframe_insert(data_path="rotation_quaternion", frame=frame_idx)
-                for pb in arm_obj.pose.bones:
-                    pb.rotation_mode = "QUATERNION"
-                    pb.rotation_quaternion = pb.matrix_basis.to_3x3().to_quaternion()
-                    pb.keyframe_insert(data_path="rotation_quaternion", frame=frame_idx)
-
-                T_c_h = rig.T_c_h[c][h]
-                T_cam_hand = T_cam_world * T_c_h
-                mat_world = arm_obj.matrix_world
-                arm_bones = arm_obj.pose.bones
-
-                # Read all 21 landmark positions directly from the posed armature.
-                # The CSV stores (0,0,0) for non-wrist joint positions; only the
-                # armature's bone head/tail positions after posing are meaningful.
-                W_px, H_px = camera.resolution
-                cx = camera.intrinsics.parameters.get("cx", W_px / 2.0)
-                cy = camera.intrinsics.parameters.get("cy", H_px / 2.0)
-                for _lm_name, src_type, bone_name in _HAND_LANDMARKS:
-                    pb = arm_bones.get(bone_name)
-                    if pb is None:
-                        row.extend([float("nan"), float("nan")])
-                        continue
-                    w = mat_world @ (pb.tail if src_type == "arm_tail" else pb.head)
-                    p_world = np.array([w.x, w.y, w.z], dtype=np.float64)
-                    p_cam = T_cam_hand.apply(p_world)
-                    if p_cam[2] > 0:
-                        u, v = project_point(p_cam, camera.intrinsics)
-                        # Apply the same barrel distortion + scale that the compositor
-                        # adds after rendering so that CSV coords match the output image.
-                        # Blender normalises by W/2 (preserving circular distortion pattern).
-                        half = W_px / 2.0
-                        xn = (u - cx) / half
-                        yn = (v - cy) / half
-                        r2 = xn * xn + yn * yn
-                        barrel = 1.0 + camera.distortion * r2
-                        u = cx + xn * barrel * camera.lens_scale * half
-                        v = cy + yn * barrel * camera.lens_scale * half
-                    else:
-                        u, v = float("nan"), float("nan")
-                    row.extend([u, v])
-            joint_rows.append(row)
-
-        # Write joints CSV.
-        csv_path = cam_dir / "joints_2d.csv"
-        with csv_path.open("w", newline="") as csv_file:
-            writer = csv.writer(csv_file)
-            writer.writerow(["timestamp"] + joint_cols)
-            writer.writerows(joint_rows)
-
-        # Pass 2: render all frames in a single call.
-        # '#' in the filepath is replaced by the zero-padded frame number.
-        scene.render.filepath = str(cam_dir / "frame_######")
-        bpy.ops.render.render(animation=True)
-
-        bpy.data.objects.remove(cam_obj)
-        bpy.data.cameras.remove(bpy_cam_data)
-
-    # Clean up imported hand models and (if added) the sun light.
-    for arm_obj in arm_objs:
-        bpy.data.objects.remove(arm_obj, do_unlink=True)
-    if sun_obj is not None:
-        bpy.data.objects.remove(sun_obj, do_unlink=True)
-    if sun_data is not None:
-        bpy.data.lights.remove(sun_data)
-
-
-def render_project(project: Project, output_path: Path) -> None:
-    """Render all sequences in a Project."""
-    for seq in project.sequences:
-        render_sequence(seq, output_path / seq.output_path)
 
 
 # ---------------------------------------------------------------------------
@@ -1214,30 +815,20 @@ def _project_landmark(
 ) -> tuple[float, float]:
     """Project a world point to distorted pixel coordinates, or NaN if behind the camera.
 
-    The compositor applies barrel distortion and a lens scale after rendering, so
-    the same forward map is applied here — otherwise the CSV would describe an
-    undistorted image that was never written to disk.
+    The compositor distorts and rescales the image after rendering, so the same
+    forward map is applied here — otherwise the CSV would describe an
+    undistorted image that was never written to disk.  See distort_pixel.
     """
     p_cam = T_cam_world.apply(np.array([point_world.x, point_world.y, point_world.z], dtype=np.float64))
     if p_cam[2] <= 0:
         return float("nan"), float("nan")
 
     u, v = project_point(p_cam, camera.intrinsics)
-
-    width, _ = camera.resolution
-    cx = camera.intrinsics.parameters.get("cx", width / 2.0)
-    cy = camera.intrinsics.parameters.get("cy", camera.resolution[1] / 2.0)
-    half = width / 2.0
-    xn = (u - cx) / half
-    yn = (v - cy) / half
-    barrel = 1.0 + camera.distortion * (xn * xn + yn * yn)
-    return (
-        cx + xn * barrel * camera.lens_scale * half,
-        cy + yn * barrel * camera.lens_scale * half,
-    )
+    width, height = camera.resolution
+    return distort_pixel(u, v, width, height, camera.distortion, camera.lens_scale)
 
 
-def render_body_sequence(seq: BodySequence, output_path: Path) -> None:
+def render_body_sequence(seq: BodySequence, output_path: Path, frames: int | None = None) -> None:
     """Render a BodySequence: pose-asset motion seen by a head-mounted camera.
 
     Structurally this mirrors render_sequence — bake keyframes and collect
@@ -1252,13 +843,45 @@ def render_body_sequence(seq: BodySequence, output_path: Path) -> None:
     Args:
         seq:         Loaded BodySequence.
         output_path: Root output directory for this sequence.
+        frames:      Frames to render per motion, overriding seq.frames.
     """
     for motion in seq.hand_motions:
         take_path = output_path if len(seq.hand_motions) == 1 else output_path / motion.name
-        _render_body_take(seq, motion, take_path)
+        _render_body_take(seq, motion, take_path, frames if frames is not None else seq.frames)
 
 
-def _render_body_take(seq: BodySequence, motion: PoseMotion, output_path: Path) -> None:
+def _sample_timestamps(motion: PoseMotion, frames: int | None, frequency: float) -> tuple[Timestamps, float]:
+    """Choose the timestamps to render, and the sampling rate they imply.
+
+    A frame count is the direct control: *frames* samples are spread evenly over
+    the whole timeline, so 2 gives the first and last frame and any count shows
+    the entire motion rather than a truncated opening.  Without one the samples
+    fall at the camera's own rate instead.
+
+    Returns:
+        The sample timestamps in nanoseconds, and the effective rate in Hz that
+        the spacing corresponds to.
+    """
+    t_end = int(motion.t_end_ns)
+
+    if frames is None:
+        dt_ns = int(NS_PER_SECOND / frequency)
+        return np.arange(0, t_end + 1, dt_ns, dtype=np.int64), frequency
+
+    count = max(1, int(frames))
+    if count == 1 or t_end <= 0:
+        return np.zeros(1, dtype=np.int64), 1.0
+    timestamps = np.linspace(0, t_end, count).round().astype(np.int64)
+    effective_hz = (count - 1) * NS_PER_SECOND / t_end
+    return timestamps, effective_hz
+
+
+def _render_body_take(
+    seq: BodySequence,
+    motion: PoseMotion,
+    output_path: Path,
+    frames: int | None = None,
+) -> None:
     """Render one pose motion of a BodySequence into *output_path*."""
     rig = seq.body_rig
     head_cam = rig.head_camera
@@ -1280,8 +903,9 @@ def _render_body_take(seq: BodySequence, motion: PoseMotion, output_path: Path) 
         cam_dir = output_path / f"cam_{cam_label}"
         cam_dir.mkdir(parents=True, exist_ok=True)
 
-        # Bake the timeline at this camera's rate so keyframes land on frames.
-        _bake_pose_motion(arm_obj, motion, camera.frequency)
+        timestamps, effective_hz = _sample_timestamps(motion, frames, camera.frequency)
+        # Bake at the sampling rate so keyframe times land exactly on rendered frames.
+        _bake_pose_motion(arm_obj, motion, effective_hz)
 
         cam_data: bpy.types.Camera = bpy.data.cameras.new(name=cam_label)
         cam_obj: bpy.types.Object = bpy.data.objects.new(cam_label, cam_data)
@@ -1289,11 +913,13 @@ def _render_body_take(seq: BodySequence, motion: PoseMotion, output_path: Path) 
         _configure_render(scene, camera, cam_obj)
         cam_obj.rotation_mode = "QUATERNION"
 
-        dt_ns = int(NS_PER_SECOND / camera.frequency)
-        timestamps = np.arange(0, motion.t_end_ns + 1, dt_ns, dtype=np.int64)
         scene.frame_start = 0
         scene.frame_end = len(timestamps) - 1
-        scene.render.fps = max(1, int(round(camera.frequency)))
+        scene.render.fps = max(1, int(round(effective_hz)))
+        print(
+            f"[phanesim] {len(timestamps)} frame(s) over {motion.t_end_ns / NS_PER_SECOND:.2f} s "
+            f"= {effective_hz:.3g} Hz effective."
+        )
 
         # Pass 1: step the baked animation, place the camera, collect projections.
         joint_rows: list[list[object]] = []
@@ -1336,7 +962,7 @@ def _render_body_take(seq: BodySequence, motion: PoseMotion, output_path: Path) 
         bpy.data.cameras.remove(cam_data)
 
 
-def preview_body_sequence(seq: BodySequence, save_path: str | None = None) -> None:
+def preview_body_sequence(seq: BodySequence, save_path: str | None = None, frames: int | None = None) -> None:
     """Bake a BodySequence as keyframes and optionally save it as a .blend file.
 
     Only the first camera and first motion are baked; open the result in
@@ -1354,7 +980,10 @@ def preview_body_sequence(seq: BodySequence, save_path: str | None = None) -> No
         _setup_world_hdri(scene, seq.hdri)
         _mute_scene_lights(scene)
 
-    _bake_pose_motion(arm_obj, motion, camera.frequency)
+    timestamps, effective_hz = _sample_timestamps(
+        motion, frames if frames is not None else seq.frames, camera.frequency
+    )
+    _bake_pose_motion(arm_obj, motion, effective_hz)
 
     cam_data: bpy.types.Camera = bpy.data.cameras.new(name="preview_cam")
     cam_obj: bpy.types.Object = bpy.data.objects.new("preview_cam", cam_data)
@@ -1362,9 +991,7 @@ def preview_body_sequence(seq: BodySequence, save_path: str | None = None) -> No
     _configure_render(scene, camera, cam_obj)
     cam_obj.rotation_mode = "QUATERNION"
 
-    dt_ns = int(NS_PER_SECOND / camera.frequency)
-    timestamps = np.arange(0, motion.t_end_ns + 1, dt_ns, dtype=np.int64)
-    scene.render.fps = max(1, int(round(camera.frequency)))
+    scene.render.fps = max(1, int(round(effective_hz)))
     scene.frame_start = 0
     scene.frame_end = len(timestamps) - 1
     scene.camera = cam_obj
@@ -1384,78 +1011,6 @@ def preview_body_sequence(seq: BodySequence, save_path: str | None = None) -> No
         cam_obj.rotation_quaternion = rotation
         cam_obj.keyframe_insert(data_path="location", frame=frame_idx)
         cam_obj.keyframe_insert(data_path="rotation_quaternion", frame=frame_idx)
-
-    print(f"[phanesim] Preview ready: {len(timestamps)} frames at {scene.render.fps} fps.")
-    if save_path:
-        bpy.ops.wm.save_as_mainfile(filepath=save_path)
-        print(f"[phanesim] Saved: {save_path}")
-
-
-def preview_sequence(seq: Sequence, save_path: str | None = None) -> None:
-    """Bake a Sequence as keyframes and optionally save the result as a .blend file.
-
-    When *save_path* is given the scene is saved headlessly and can be opened
-    separately in Blender's GUI.  The timeline spans all frames at the camera's fps.
-    Only the first camera is used as the active scene camera.
-    """
-    scene = bpy.context.scene
-    rig = seq.camhand_rig
-
-    t_start = max(
-        *(m.ts[0] for m in seq.cam_motions),
-        *(m.ts[0] for m in seq.hand_motions),
-    )
-    t_end = min(
-        *(m.ts[-1] for m in seq.cam_motions),
-        *(m.ts[-1] for m in seq.hand_motions),
-    )
-
-    if seq.hdri:
-        _setup_world_hdri(scene, seq.hdri)
-    else:
-        _add_sun_light()
-        _setup_world_light(scene)
-
-    arm_objs: list[bpy.types.Object] = []
-    for hand in rig.hands:
-        arm_objs.append(_load_hand_model(hand.model))
-
-    camera = rig.cameras[0]
-    cam_motion = seq.cam_motions[0]
-
-    bpy_cam_data: bpy.types.Camera = bpy.data.cameras.new(name="preview_cam")
-    cam_obj: bpy.types.Object = bpy.data.objects.new("preview_cam", bpy_cam_data)
-    bpy.context.collection.objects.link(cam_obj)
-    _configure_render(scene, camera, cam_obj)
-    cam_obj.rotation_mode = "QUATERNION"
-
-    dt_ns = int(1e9 / camera.frequency)
-    timestamps = np.arange(t_start, t_end + 1, dt_ns, dtype=np.int64)
-    scene.render.fps = max(1, int(round(camera.frequency)))
-    scene.frame_start = 0
-    scene.frame_end = len(timestamps) - 1
-    scene.camera = cam_obj
-
-    for frame_idx, ts in enumerate(timestamps):
-        T_world_cam = cam_motion.get_pose(ts) * camera.T_b_c
-        mat = mathutils.Matrix(T_world_cam.as_matrix().tolist()) @ _OPENCV_TO_BLENDER_CAM
-        loc, rot, _ = mat.decompose()
-        cam_obj.location = loc
-        cam_obj.rotation_quaternion = rot
-        cam_obj.keyframe_insert(data_path="location", frame=frame_idx)
-        cam_obj.keyframe_insert(data_path="rotation_quaternion", frame=frame_idx)
-
-        for hand_motion, arm_obj in zip(seq.hand_motions, arm_objs, strict=True):
-            joint_poses = hand_motion.get_joint_poses(ts)
-            _set_hand_bones(arm_obj, hand_motion.joint_names, joint_poses)
-
-            arm_obj.keyframe_insert(data_path="location", frame=frame_idx)
-            arm_obj.keyframe_insert(data_path="rotation_quaternion", frame=frame_idx)
-
-            for pb in arm_obj.pose.bones:
-                pb.rotation_mode = "QUATERNION"
-                pb.rotation_quaternion = pb.matrix_basis.to_3x3().to_quaternion()
-                pb.keyframe_insert(data_path="rotation_quaternion", frame=frame_idx)
 
     print(f"[phanesim] Preview ready: {len(timestamps)} frames at {scene.render.fps} fps.")
     if save_path:

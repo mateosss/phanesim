@@ -1,10 +1,10 @@
 {
-  "name": "minimal",
-  "output_path": "minimal",
-  "camhand_rig": {
+  "name": "poisson_female",
+  "output_path": "poisson_female",
+  "body_rig": {
     "cameras": [
       {
-        "name": "cam0",
+        "name": "head0",
         "T_b_c": {
           "pos": [0.0, 0.0, 0.0],
           "quat": [0.0, 0.0, 0.0, 1.0]
@@ -19,7 +19,7 @@
           }
         },
         "resolution": [640, 480],
-        "frequency": 2.0,
+        "frequency": 10.0,
         "pixel_format": "MONO8",
         "shutter": "global",
         "exposure": 0,
@@ -30,26 +30,26 @@
         "lens_scale": 1.2,
         "vignette_factor": 0.533,
         "vignette_feather": 0.4,
-        "noise_std": 0.318,
-        "chroma_noise": 0.050
+        "noise_std": 1.0,
+        "chroma_noise": 0.0
       }
     ],
-    "hands": [
-      {
-        "name": "right",
-        "model": "../../hand.blend"
-      }
-    ],
-    "T_c_h": [
-      [
-        {
-          "pos": [0.0, 0.0, 0.0],
-          "quat": [0.0, 0.0, 0.0, 1.0]
-        }
-      ]
-    ]
+    "body": {
+      "name": "cfemale1",
+      "model": "../../cfemale1.blend",
+      "armature": "rig",
+      "hands": ["right", "left"]
+    },
+    "head_camera": {
+      "anchor_bone": "ORG-spine.006",
+      "rest_position": [0.0, -0.19, 1.564],
+      "rest_forward": [0.0, -1.0, 0.0],
+      "track_hands": ["right", "left"],
+      "track_landmark": "MiddleProximal",
+      "max_deviation_deg": 35.0
+    }
   },
-  "cam_motions": ["cam_motion.csv"],
-  "hand_motions": ["hand_motion.csv"],
+  "hand_motions": ["animation01.json"],
+  "frames": 31,
   "hdri": "../../hdri/brown_photostudio_02_2k.exr"
 }

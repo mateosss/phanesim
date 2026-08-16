@@ -3,7 +3,7 @@
   "$id": "camera.json",
   "title": "Camera",
   "type": "object",
-  "required": ["T_b_c", "intrinsics", "resolution", "frequency", "pixel_format", "shutter", "exposure", "gain"],
+  "required": ["T_b_c", "intrinsics", "resolution", "pixel_format", "shutter", "exposure", "gain"],
   "additionalProperties": false,
   "properties": {
     "name": {"type": "string"},
@@ -26,7 +26,11 @@
       "minItems": 2,
       "maxItems": 2
     },
-    "frequency": {"type": "number", "exclusiveMinimum": 0},
+    "frequency": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "description": "Sampling rate in Hz. Only used when the sequence does not declare a frame count; body sequences normally set \"frames\" instead. Defaults to 10."
+    },
     "pixel_format": {"type": "string", "enum": ["RGB24", "MONO8"]},
     "shutter": {"type": "string", "enum": ["global"]},
     "exposure": {"type": "integer"},
