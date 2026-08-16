@@ -248,10 +248,10 @@ which is a Poisson process conditioned on its event count.
 ### 2. Render
 
 ```bash
-uv run phanesim generate body_sequence data/sequences/poisson_male/sequence.json \
+uv run phanesim generate body_sequence data/sequences/male/sequence.json \
     --frames 81 --output output_folder
 
-uv run phanesim preview body_sequence data/sequences/poisson_male/sequence.json \
+uv run phanesim preview body_sequence data/sequences/male/sequence.json \
     --frames 15 --output preview.blend
 ```
 
