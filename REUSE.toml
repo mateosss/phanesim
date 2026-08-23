@@ -3,16 +3,12 @@
 
 version = 1
 
-[[annotations]]
-path = ["data/hand.blend", "data/textures/**"]
-SPDX-FileCopyrightText = "Manuel Bastioni, MB-Lab contributors"
-SPDX-License-Identifier = "AGPL-3.0-only"
-
 # Derivative works: bodies generated from the MB-Lab base meshes, then rigged,
-# posed and materialled by Yutong Wan.  See MBLab_Rigify_Pose_Guide.md for the
-# pipeline.  Both the upstream and the derivative authorship are recorded.
+# posed and materialled by Yutong Wan.  See human_generation.md for the pipeline.
+# Both the upstream and the derivative authorship are recorded.  Covers the
+# .blend files and the .json files recording their MB-Lab parameters.
 [[annotations]]
-path = ["data/cmale1.blend", "data/cfemale1.blend"]
+path = "data/models/**"
 SPDX-FileCopyrightText = ["Manuel Bastioni, MB-Lab contributors", "2026 Yutong Wan"]
 SPDX-License-Identifier = "AGPL-3.0-only"
 
@@ -30,14 +26,6 @@ SPDX-License-Identifier = "BSD-3-Clause"
 
 [[annotations]]
 path = "src/phanesim/schemas/**"
-SPDX-FileCopyrightText = "2026 Yutong Wan"
-SPDX-License-Identifier = "BSD-3-Clause"
-
-# Asset Browser catalog definitions. Blender stores these beside the .blend
-# files rather than inside them, so the sidecar must be version-controlled or
-# the pose folders are lost.
-[[annotations]]
-path = "data/blender_assets.cats.txt"
 SPDX-FileCopyrightText = "2026 Yutong Wan"
 SPDX-License-Identifier = "BSD-3-Clause"
 

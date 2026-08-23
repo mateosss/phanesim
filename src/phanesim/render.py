@@ -964,14 +964,10 @@ def preview_body_sequence(seq: BodySequence, save_path: str | None = None, frame
     scene.frame_end = len(timestamps) - 1
     scene.camera = cam_obj
 
-
     for frame_idx in range(len(timestamps)):
         scene.frame_set(frame_idx)
         bpy.context.view_layer.update()
-        mat = (
-            mathutils.Matrix(_head_camera_transform(arm_obj, head_cam).as_matrix().tolist())
-            @ _OPENCV_TO_BLENDER_CAM
-        )
+        mat = mathutils.Matrix(_head_camera_transform(arm_obj, head_cam).as_matrix().tolist()) @ _OPENCV_TO_BLENDER_CAM
         location, rotation, _ = mat.decompose()
         cam_obj.location = location
         cam_obj.rotation_quaternion = rotation
