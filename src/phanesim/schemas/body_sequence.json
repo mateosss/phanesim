@@ -4,22 +4,32 @@
   "title": "BodySequence",
   "description": "A rendering sequence driven by pose assets instead of motion CSVs. hand_motions entries are pose motion description JSONs, not CSVs.",
   "type": "object",
-  "required": ["name", "output_path", "body_rig", "hand_motions"],
+  "required": [
+    "name",
+    "body_rig",
+    "hand_motions",
+    "frames"
+  ],
   "additionalProperties": false,
   "properties": {
-    "name": {"type": "string"},
-    "output_path": {"type": "string"},
-    "body_rig": {"$ref": "body_rig.json"},
+    "name": {
+      "type": "string"
+    },
+    "body_rig": {
+      "$ref": "body_rig.json"
+    },
     "hand_motions": {
       "type": "array",
       "minItems": 1,
-      "items": {"type": "string"},
+      "items": {
+        "type": "string"
+      },
       "description": "Paths to pose motion description JSONs (see pose_motion.json)."
     },
     "frames": {
       "type": "integer",
       "minimum": 1,
-      "description": "How many frames to render per motion, spread evenly across the whole timeline. 2 gives the first and last frame. Overridden by --frames on the command line; when omitted the count is derived from the camera frequency instead."
+      "description": "How many frames to render per motion, spread evenly across the whole timeline. 2 gives the first and last frame. Overridden by --frames on the command line."
     },
     "hdri": {
       "type": "string",

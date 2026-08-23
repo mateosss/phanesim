@@ -802,24 +802,19 @@ def render_body_sequence(
         _render_body_take(seq, motion, take_path, frames if frames is not None else seq.frames, write_3d)
 
 
-def _sample_timestamps(motion: PoseMotion, frames: int | None, frequency: float) -> tuple[Timestamps, float]:
+def _sample_timestamps(motion: PoseMotion, frames: int) -> tuple[Timestamps, float]:
     """Choose the timestamps to render, and the sampling rate they imply.
 
-    A frame count is the direct control: *frames* samples are spread evenly over
+    The frame count is the only control: *frames* samples are spread evenly over
     the whole timeline, so 2 gives the first and last frame and any count shows
-    the entire motion rather than a truncated opening.  Without one the samples
-    fall at the camera's own rate instead.
+    the entire motion rather than a truncated opening.  The rate is a
+    consequence, reported rather than configured.
 
     Returns:
         The sample timestamps in nanoseconds, and the effective rate in Hz that
         the spacing corresponds to.
     """
     t_end = int(motion.t_end_ns)
-
-    if frames is None:
-        dt_ns = int(NS_PER_SECOND / frequency)
-        return np.arange(0, t_end + 1, dt_ns, dtype=np.int64), frequency
-
     count = max(1, int(frames))
     if count == 1 or t_end <= 0:
         return np.zeros(1, dtype=np.int64), 1.0
@@ -832,7 +827,7 @@ def _render_body_take(
     seq: BodySequence,
     motion: PoseMotion,
     output_path: Path,
-    frames: int | None = None,
+    frames: int,
     write_3d: bool = False,
 ) -> None:
     """Render one pose motion of a BodySequence into *output_path*."""
@@ -855,7 +850,7 @@ def _render_body_take(
         cam_dir = output_path / f"cam_{cam_label}"
         cam_dir.mkdir(parents=True, exist_ok=True)
 
-        timestamps, effective_hz = _sample_timestamps(motion, frames, camera.frequency)
+        timestamps, effective_hz = _sample_timestamps(motion, frames)
         # Bake at the sampling rate so keyframe times land exactly on rendered frames.
         _bake_pose_motion(arm_obj, motion, effective_hz)
 
@@ -948,9 +943,7 @@ def preview_body_sequence(seq: BodySequence, save_path: str | None = None, frame
         _setup_world_hdri(scene, seq.hdri)
         _mute_scene_lights(scene)
 
-    timestamps, effective_hz = _sample_timestamps(
-        motion, frames if frames is not None else seq.frames, camera.frequency
-    )
+    timestamps, effective_hz = _sample_timestamps(motion, frames if frames is not None else seq.frames)
     _bake_pose_motion(arm_obj, motion, effective_hz)
 
     cam_data: bpy.types.Camera = bpy.data.cameras.new(name="preview_cam")

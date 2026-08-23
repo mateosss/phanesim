@@ -1,23 +1,9 @@
 {
   "name": "model2",
-  "output_path": "model2",
   "body_rig": {
     "cameras": [
       {
         "name": "head0",
-        "T_b_c": {
-          "pos": [
-            0.0,
-            0.0,
-            0.0
-          ],
-          "quat": [
-            0.0,
-            0.0,
-            0.0,
-            1.0
-          ]
-        },
         "intrinsics": {
           "name": "pinhole",
           "parameters": {
@@ -31,11 +17,8 @@
           640,
           480
         ],
-        "frequency": 10.0,
         "pixel_format": "MONO8",
         "shutter": "global",
-        "exposure": 0,
-        "gain": 0,
         "ca_factor": 0.3,
         "distortion": 0.387,
         "dispersion": 0.0,

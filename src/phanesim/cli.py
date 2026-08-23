@@ -161,33 +161,17 @@ def _run_blender(expr: str, blender_bin: str | None) -> int:
 
 VALIDATE_KINDS = (
     "camera",
-    "camera_motion",
-    "hand_motion",
-    "hand",
-    "camhand_rig",
-    "sequence",
-    "project",
     "body_rig",
     "body_sequence",
     "pose_motion",
 )
 
-GENERATE_KINDS = (
-    "sequence",
-    "project",
-    "body_sequence",
-)
+GENERATE_KINDS = ("body_sequence",)
 
-PREVIEW_KINDS = ("sequence", "body_sequence")
+PREVIEW_KINDS = ("body_sequence",)
 
 _VALIDATE_FNS = {
     "camera": val.validate_camera,
-    "camera_motion": val.validate_camera_motion,
-    "hand_motion": val.validate_hand_motion,
-    "hand": val.validate_hand,
-    "camhand_rig": val.validate_camhand_rig,
-    "sequence": val.validate_sequence,
-    "project": val.validate_project,
     "body_rig": val.validate_body_rig,
     "body_sequence": val.validate_body_sequence,
     "pose_motion": val.validate_pose_motion,
@@ -260,17 +244,9 @@ def generate(
     input_abs = str(input_path.resolve())
     output_abs = str(output_path.resolve())
 
-    loaders = {
-        "sequence": ("Sequence", "render_sequence"),
-        "project": ("Project", "render_project"),
-        "body_sequence": ("BodySequence", "render_body_sequence"),
-    }
-    cls_name, fn_name = loaders[kind]
-    if frames is not None and kind != "body_sequence":
-        click.echo("Error: --frames is only supported for body_sequence.", err=True)
-        sys.exit(1)
+    cls_name, fn_name = "BodySequence", "render_body_sequence"
     extra = f", frames={frames!r}" if frames is not None else ""
-    if kind == "body_sequence" and debug_kps:
+    if debug_kps:
         # Ground-truth 3D joint poses are only worth the extra file when the
         # debug pass is asked for; the data itself is already in hand.
         extra += ", write_3d=True"
@@ -440,10 +416,8 @@ def preview(kind: str, input_path: Path, output_blend: Path, frames: int | None,
     input_abs = str(input_path.resolve())
     blend_out = str(Path(output_blend).resolve())
 
-    cls_name, fn_name = (
-        ("BodySequence", "preview_body_sequence") if kind == "body_sequence" else ("Sequence", "preview_sequence")
-    )
-    pv_extra = f", frames={frames!r}" if frames is not None and kind == "body_sequence" else ""
+    cls_name, fn_name = "BodySequence", "preview_body_sequence"
+    pv_extra = f", frames={frames!r}" if frames is not None else ""
     expr = (
         _sys_path_setup()
         + "from pathlib import Path; "
