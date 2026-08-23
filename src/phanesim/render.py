@@ -41,7 +41,6 @@ from pathlib import Path
 import bpy  # pyright: ignore[reportMissingImports]
 import mathutils  # pyright: ignore[reportMissingImports]
 import numpy as np
-import numpy.typing as npt
 from scipy.spatial.transform import Rotation
 
 from phanesim.posemotion import NS_PER_SECOND, PoseAsset, PoseMotion
@@ -133,6 +132,15 @@ def distort_pixel(
     yn = (y + 0.5 - half_h) / half_h
 
     r2 = xn * xn + yn * yn
+
+    # Beyond r = 1/sqrt(k) the map turns over and starts folding outward points
+    # back toward the centre, so a landmark far outside the field of view would
+    # be reported inside the image.  Blender draws the same line: its shader
+    # writes a transparent pixel once distortion * r^2 exceeds 1.  Outside that
+    # radius the point simply has no position in the rendered frame.
+    if distortion * r2 > 1.0:
+        return float("nan"), float("nan")
+
     factor = (1.0 + distortion) / (1.0 + distortion * r2) * scale
 
     return (
@@ -256,6 +264,7 @@ def _setup_compositor(scene: bpy.types.Scene, camera: Camera) -> None:
     if noise.node_tree:
         noise.inputs["Luminance Noise"].default_value = camera.noise_std
         noise.inputs["Chroma Noise"].default_value = camera.chroma_noise
+        noise.inputs["Animated"].default_value = True
     links.new(cur, noise.inputs["Image"])
     cur = noise.outputs["Image"]
 
@@ -488,10 +497,10 @@ def _bake_pose_motion(
 ) -> bpy.types.Action:
     """Bake a pose motion description into a single keyframed action.
 
-    Every event contributes a hold key at ``t_ns - blend_ns`` carrying the
-    previous pose and a target key at ``t_ns`` carrying the new one, so the pose
-    stays put and then transitions over exactly blend_ns.  Multi-frame assets are
-    additionally sampled across their playback span.
+    Every event contributes one key at its own ``t_ns``; Blender interpolates
+    between consecutive keys, so the armature moves continuously from each pose
+    into the next.  Multi-frame assets are additionally sampled across their
+    playback span.
 
     Blender's own F-curve interpolation then supplies every intermediate frame,
     which is why the per-frame render loop only has to call frame_set.
@@ -541,20 +550,21 @@ def _bake_pose_motion(
     baked = bpy.data.actions.new(name=action_name)
     _assign_action(arm_obj, baked)
 
-    prev_key: tuple[str, int] | None = None
-    for event, keys in zip(motion.events, event_plans, strict=True):
-        dest_frame, asset_name, src_frame = keys[0]
-
-        # Hold the outgoing pose until the transition starts, so the armature
-        # sits still between events instead of drifting the whole gap.
-        if prev_key is not None and event.blend_ns > 0:
-            hold_frame = to_frame(max(0, event.t_ns - event.blend_ns))
-            if hold_frame < dest_frame:
-                _key_pose(arm_obj, snapshots[prev_key], hold_frame)
-
+    for keys in event_plans:
         for frame, asset_name, src_frame in keys:
             _key_pose(arm_obj, snapshots[(asset_name, src_frame)], frame)
-            prev_key = (asset_name, src_frame)
+
+    # Blender defaults to Bezier with auto-clamped handles, which flattens the
+    # curve at every key: motion nearly stops on each pose and accelerates in
+    # between, so frames sampled just after a key can be visually identical.
+    # Linear keeps velocity constant across each segment, which is what makes
+    # every frame differ from the one before it.
+    for layer in baked.layers:
+        for strip in layer.strips:
+            for channelbag in strip.channelbags:
+                for fcurve in channelbag.fcurves:
+                    for keyframe in fcurve.keyframe_points:
+                        keyframe.interpolation = "LINEAR"
 
     total_keys = sum(len(k) for k in event_plans)
     print(f"[phanesim] Baked {len(motion.events)} pose event(s) into {total_keys} keyframe group(s).")
@@ -638,43 +648,23 @@ def _bone_world(arm_obj: bpy.types.Object, bone_name: str, tail: bool = False) -
     return arm_obj.matrix_world @ (pb.tail if tail else pb.head)
 
 
-def clamp_direction(
-    desired: npt.NDArray[np.float64],
-    base: npt.NDArray[np.float64],
-    max_angle_rad: float,
-) -> npt.NDArray[np.float64]:
-    """Return *desired* pulled back to within *max_angle_rad* of *base*.
+def _bone_world_pose(
+    arm_obj: bpy.types.Object,
+    bone_name: str,
+    tail: bool = False,
+) -> tuple[mathutils.Vector, mathutils.Quaternion] | None:
+    """World-space position and orientation of a posed bone, or None if absent.
 
-    Rotating *base* toward *desired* about their common perpendicular keeps the
-    result in the plane the two span, so the gaze turns the short way round and
-    never rolls sideways to reach its limit.  Both inputs are treated as
-    directions; the result is a unit vector.
-
-    This is what makes the head camera read as a headset rather than a turret:
-    it may look toward the hands, but never further from straight ahead than a
-    neck can plausibly turn.
+    Fingertips are the tail of their distal bone and have no orientation of their
+    own, so they inherit that bone's rotation — the same convention the 2D
+    landmarks use for position.
     """
-    d = np.asarray(desired, dtype=np.float64)
-    b = np.asarray(base, dtype=np.float64)
-    d_norm, b_norm = np.linalg.norm(d), np.linalg.norm(b)
-    if d_norm < 1e-9 or b_norm < 1e-9:
-        return b / b_norm if b_norm >= 1e-9 else np.array([0.0, -1.0, 0.0])
-    d = d / d_norm
-    b = b / b_norm
-
-    angle = math.acos(float(np.clip(np.dot(d, b), -1.0, 1.0)))
-    if angle <= max_angle_rad:
-        return d
-
-    axis = np.cross(b, d)
-    axis_norm = np.linalg.norm(axis)
-    if axis_norm < 1e-9:
-        # Exactly opposite: no unique short way round, so stay looking ahead.
-        return b
-    axis = axis / axis_norm
-    # Rodrigues rotation of b about axis; axis is perpendicular to b, so the
-    # (axis . b) term of the general formula drops out.
-    return b * math.cos(max_angle_rad) + np.cross(axis, b) * math.sin(max_angle_rad)
+    pb = arm_obj.pose.bones.get(bone_name)
+    if pb is None:
+        return None
+    matrix = arm_obj.matrix_world @ pb.matrix
+    position = arm_obj.matrix_world @ (pb.tail if tail else pb.head)
+    return position, matrix.to_quaternion()
 
 
 def _head_delta(arm_obj: bpy.types.Object, head_cam: HeadCamera) -> mathutils.Matrix:
@@ -690,26 +680,13 @@ def _head_delta(arm_obj: bpy.types.Object, head_cam: HeadCamera) -> mathutils.Ma
     return arm_obj.matrix_world @ pose_bone.matrix @ bone.matrix_local.inverted() @ arm_obj.matrix_world.inverted()
 
 
-def _head_camera_transform(
-    arm_obj: bpy.types.Object,
-    head_cam: HeadCamera,
-    targets: list[mathutils.Vector],
-) -> Transform:
-    """Compute the AR-headset camera pose for the current pose of the rig.
+def _head_camera_transform(arm_obj: bpy.types.Object, head_cam: HeadCamera) -> Transform:
+    """Compute the head-mounted camera pose for the current pose of the rig.
 
-    Position and the straight-ahead direction are both rigidly attached to the
-    head: the configured rest-pose values are carried through the head bone's
-    rest-to-pose delta.  The camera then turns from straight ahead toward the
-    *targets* by at most head_cam.max_deviation_deg, which keeps the hands
-    framed without the view ever leaving a plausible front-facing gaze.
-
-    Args:
-        arm_obj:  The posed armature.
-        head_cam: Camera configuration.
-        targets:  World points to frame, typically one per tracked hand.  Their
-                  midpoint is used, so two hands are framed together.  Targets
-                  behind the head are dropped rather than dragging the aim
-                  backwards; if that leaves nothing, the camera looks ahead.
+    Position and direction are both rigidly attached to the head: the configured
+    rest-pose values are carried through the head bone's rest-to-pose delta.  The
+    camera never turns to follow the hands, so they enter and leave the frame on
+    their own, exactly as on a real headset.
 
     Returns:
         T_world_cam in the OpenCV convention (X right, Y down, Z forward).
@@ -723,28 +700,12 @@ def _head_camera_transform(
     delta = _head_delta(arm_obj, head_cam)
     position = delta @ mathutils.Vector(tuple(float(c) for c in head_cam.rest_position))
 
-    rest_forward = head_cam.rest_forward if head_cam.rest_forward is not None else (0.0, -1.0, 0.0)
+    rest_forward = head_cam.rest_forward if head_cam.rest_forward is not None else (0.0, -1.0, -0.268)
     # to_3x3 so the direction is rotated by the head but not displaced by it.
     rotation_only = delta.to_3x3()
-    base_forward = (rotation_only @ mathutils.Vector(tuple(float(c) for c in rest_forward))).normalized()
-    head_up = (rotation_only @ mathutils.Vector((0.0, 0.0, 1.0))).normalized()
+    forward = (rotation_only @ mathutils.Vector(tuple(float(c) for c in rest_forward))).normalized()
+    up = (rotation_only @ mathutils.Vector((0.0, 0.0, 1.0))).normalized()
 
-    # Aim at the hands that are actually in front of the face.
-    visible = [t for t in targets if (t - position).dot(base_forward) > 0.0]
-    forward = base_forward
-    if visible:
-        centroid = sum(visible, mathutils.Vector((0.0, 0.0, 0.0))) / len(visible)
-        direction = centroid - position
-        if direction.length > 1e-6:
-            clamped = clamp_direction(
-                np.array([direction.x, direction.y, direction.z], dtype=np.float64),
-                np.array([base_forward.x, base_forward.y, base_forward.z], dtype=np.float64),
-                math.radians(head_cam.max_deviation_deg),
-            )
-            forward = mathutils.Vector((float(clamped[0]), float(clamped[1]), float(clamped[2])))
-
-    # Build the OpenCV basis (X right, Y down, Z forward) around that gaze.
-    up = head_up
     if abs(forward.dot(up)) > 0.999:
         # Looking straight along the up axis: any other hint gives a stable roll.
         up = mathutils.Vector((0.0, 1.0, 0.0))
@@ -765,36 +726,6 @@ def _head_camera_transform(
     )
 
 
-def _tracked_bones(head_cam: HeadCamera) -> list[tuple[str, bool]]:
-    """Resolve the aim landmark to one (bone name, use_tail) pair per tracked hand.
-
-    Raises:
-        RuntimeError: If track_landmark is not one of the 21 OpenXR landmarks.
-    """
-    resolved: list[tuple[str, bool]] = []
-    for side in head_cam.track_hands:
-        landmarks = rigify_hand_landmarks(side)
-        match = next((lm for lm in landmarks if lm[0] == head_cam.track_landmark), None)
-        if match is None:
-            raise RuntimeError(
-                f"head_camera.track_landmark {head_cam.track_landmark!r} is not a landmark; "
-                f"expected one of {sorted(name for name, _, _ in landmarks)}"
-            )
-        _, src_type, bone_name = match
-        resolved.append((bone_name, src_type == "arm_tail"))
-    return resolved
-
-
-def _aim_targets(arm_obj: bpy.types.Object, track_bones: list[tuple[str, bool]]) -> list[mathutils.Vector]:
-    """World positions of the tracked landmarks, skipping any bone the rig lacks."""
-    targets = []
-    for bone_name, use_tail in track_bones:
-        point = _bone_world(arm_obj, bone_name, tail=use_tail)
-        if point is not None:
-            targets.append(point)
-    return targets
-
-
 def _body_joint_columns(seq: BodySequence) -> tuple[list[str], list[tuple[str, list[tuple[str, str, str]]]]]:
     """Return the joints_2d column names and the per-hand landmark definitions."""
     columns: list[str] = []
@@ -806,6 +737,21 @@ def _body_joint_columns(seq: BodySequence) -> tuple[list[str], list[tuple[str, l
             columns.append(f"{side}_{landmark_name}_u")
             columns.append(f"{side}_{landmark_name}_v")
     return columns, hands
+
+
+def _body_joint_3d_columns(hands: list[tuple[str, list[tuple[str, str, str]]]]) -> list[str]:
+    """Return the joints_3d column names: 7 per landmark, xyz then xyzw quaternion.
+
+    The layout matches the hand motion CSVs the earlier pipeline consumed, so the
+    two are readable by the same code.
+    """
+    columns: list[str] = []
+    for side, landmarks in hands:
+        for landmark_name, _, _ in landmarks:
+            stem = f"{side}_{landmark_name}"
+            columns += [f"{stem}_x", f"{stem}_y", f"{stem}_z"]
+            columns += [f"{stem}_qx", f"{stem}_qy", f"{stem}_qz", f"{stem}_qw"]
+    return columns
 
 
 def _project_landmark(
@@ -828,7 +774,12 @@ def _project_landmark(
     return distort_pixel(u, v, width, height, camera.distortion, camera.lens_scale)
 
 
-def render_body_sequence(seq: BodySequence, output_path: Path, frames: int | None = None) -> None:
+def render_body_sequence(
+    seq: BodySequence,
+    output_path: Path,
+    frames: int | None = None,
+    write_3d: bool = False,
+) -> None:
     """Render a BodySequence: pose-asset motion seen by a head-mounted camera.
 
     Structurally this mirrors render_sequence — bake keyframes and collect
@@ -844,10 +795,11 @@ def render_body_sequence(seq: BodySequence, output_path: Path, frames: int | Non
         seq:         Loaded BodySequence.
         output_path: Root output directory for this sequence.
         frames:      Frames to render per motion, overriding seq.frames.
+        write_3d:    Also write joints_3d.csv with world-space joint poses.
     """
     for motion in seq.hand_motions:
         take_path = output_path if len(seq.hand_motions) == 1 else output_path / motion.name
-        _render_body_take(seq, motion, take_path, frames if frames is not None else seq.frames)
+        _render_body_take(seq, motion, take_path, frames if frames is not None else seq.frames, write_3d)
 
 
 def _sample_timestamps(motion: PoseMotion, frames: int | None, frequency: float) -> tuple[Timestamps, float]:
@@ -881,6 +833,7 @@ def _render_body_take(
     motion: PoseMotion,
     output_path: Path,
     frames: int | None = None,
+    write_3d: bool = False,
 ) -> None:
     """Render one pose motion of a BodySequence into *output_path*."""
     rig = seq.body_rig
@@ -896,7 +849,6 @@ def _render_body_take(
         print(f"[phanesim] HDRI lighting: muted {muted} light(s) shipped with the model.")
 
     joint_columns, hands = _body_joint_columns(seq)
-    track_bones = _tracked_bones(head_cam)
 
     for camera_index, camera in enumerate(rig.cameras):
         cam_label = camera.name or f"cam{camera_index}"
@@ -923,11 +875,12 @@ def _render_body_take(
 
         # Pass 1: step the baked animation, place the camera, collect projections.
         joint_rows: list[list[object]] = []
+        joint_3d_rows: list[list[object]] = []
         for frame_idx, ts in enumerate(timestamps):
             scene.frame_set(frame_idx)
             bpy.context.view_layer.update()
 
-            T_world_cam = _head_camera_transform(arm_obj, head_cam, _aim_targets(arm_obj, track_bones))
+            T_world_cam = _head_camera_transform(arm_obj, head_cam)
             T_cam_world = T_world_cam.inv()
 
             mat = mathutils.Matrix(T_world_cam.as_matrix().tolist()) @ _OPENCV_TO_BLENDER_CAM
@@ -938,20 +891,35 @@ def _render_body_take(
             cam_obj.keyframe_insert(data_path="rotation_quaternion", frame=frame_idx)
 
             row: list[object] = [int(ts)]
+            row_3d: list[object] = [int(ts)]
+            nan = float("nan")
             for _side, landmarks in hands:
                 for _name, src_type, bone_name in landmarks:
-                    point = _bone_world(arm_obj, bone_name, tail=src_type == "arm_tail")
-                    if point is None:
-                        row.extend([float("nan"), float("nan")])
+                    pose = _bone_world_pose(arm_obj, bone_name, tail=src_type == "arm_tail")
+                    if pose is None:
+                        row.extend([nan, nan])
+                        row_3d.extend([nan] * 7)
                         continue
+                    point, quat = pose
                     row.extend(_project_landmark(point, T_cam_world, camera))
+                    # xyz then xyzw: scipy/JSON scalar-last, as everywhere else.
+                    row_3d.extend([point.x, point.y, point.z, quat.x, quat.y, quat.z, quat.w])
             joint_rows.append(row)
+            joint_3d_rows.append(row_3d)
 
         csv_path = cam_dir / "joints_2d.csv"
         with csv_path.open("w", newline="") as csv_file:
             writer = csv.writer(csv_file)
             writer.writerow(["timestamp"] + joint_columns)
             writer.writerows(joint_rows)
+
+        if write_3d:
+            csv_3d_path = cam_dir / "joints_3d.csv"
+            with csv_3d_path.open("w", newline="") as csv_file:
+                writer = csv.writer(csv_file)
+                writer.writerow(["timestamp"] + _body_joint_3d_columns(hands))
+                writer.writerows(joint_3d_rows)
+            print(f"[phanesim] Wrote {csv_3d_path.name}: world-space joint poses.")
 
         # Pass 2: render every frame in one call so EEVEE initialises once.
         scene.render.filepath = str(cam_dir / "frame_######")
@@ -996,14 +964,12 @@ def preview_body_sequence(seq: BodySequence, save_path: str | None = None, frame
     scene.frame_end = len(timestamps) - 1
     scene.camera = cam_obj
 
-    track_bones = _tracked_bones(head_cam)
 
     for frame_idx in range(len(timestamps)):
         scene.frame_set(frame_idx)
         bpy.context.view_layer.update()
-        targets = _aim_targets(arm_obj, track_bones)
         mat = (
-            mathutils.Matrix(_head_camera_transform(arm_obj, head_cam, targets).as_matrix().tolist())
+            mathutils.Matrix(_head_camera_transform(arm_obj, head_cam).as_matrix().tolist())
             @ _OPENCV_TO_BLENDER_CAM
         )
         location, rotation, _ = mat.decompose()

@@ -12,12 +12,12 @@ Blender.
 
 Timeline semantics
 ------------------
-Each event names the asset that is *fully reached* at ``t_ns``.  The transition
-into it starts ``blend_ns`` earlier, so the armature holds the previous pose
-until ``t_ns - blend_ns`` and then interpolates::
+Each event names the asset that is *fully reached* at ``t_ns``.  Motion is
+continuous: the armature interpolates from one pose straight into the next over
+the whole gap between them, so no frame is ever a repeat of the one before it::
 
-    ... hold prev ...|<-- blend_ns -->|<-- asset reached at t_ns
-                  t_ns-blend_ns      t_ns
+    pose A reached      interpolating       pose B reached
+         t0 |---------------------------------| t1
 
 For ``kind == "action"`` events the asset is a multi-frame animation: after it is
 reached at ``t_ns`` its source frames are played back over ``duration_ns``.
@@ -37,7 +37,9 @@ NS_PER_SECOND = 1_000_000_000
 # Sampling defaults, used when the caller asks for neither a count nor a length.
 DEFAULT_EVENT_COUNT = 8
 DEFAULT_DURATION_SECONDS = 20.0
-DEFAULT_BLEND_SECONDS = 0.5
+# Generation is reproducible by default: the same command yields the same
+# timeline unless a different seed is asked for.
+DEFAULT_SEED = 42
 
 
 @dataclass
@@ -48,7 +50,6 @@ class PoseEvent:
         t_ns:         Time at which the asset is fully reached, in nanoseconds.
         asset:        Name of the pose asset (an action inside the model .blend).
         kind:         "pose" for single-frame assets, "action" for multi-frame ones.
-        blend_ns:     Duration of the transition that ends at t_ns.
         duration_ns:  For "action" events, playback length after t_ns; 0 for poses.
         source_frames: For "action" events, the asset's own [first, last] frame range.
     """
@@ -56,7 +57,6 @@ class PoseEvent:
     t_ns: int
     asset: str
     kind: str = "pose"
-    blend_ns: int = int(DEFAULT_BLEND_SECONDS * NS_PER_SECOND)
     duration_ns: int = 0
     source_frames: tuple[int, int] | None = None
 
@@ -70,7 +70,6 @@ class PoseEvent:
             "t_ns": int(self.t_ns),
             "asset": self.asset,
             "kind": self.kind,
-            "blend_ns": int(self.blend_ns),
         }
         if self.kind == "action":
             data["duration_ns"] = int(self.duration_ns)
@@ -85,7 +84,6 @@ class PoseEvent:
             t_ns=int(data["t_ns"]),
             asset=str(data["asset"]),
             kind=str(data.get("kind", "pose")),
-            blend_ns=int(data.get("blend_ns", DEFAULT_BLEND_SECONDS * NS_PER_SECOND)),
             duration_ns=int(data.get("duration_ns", 0)),
             source_frames=(int(frames[0]), int(frames[1])) if frames else None,
         )
@@ -100,8 +98,7 @@ class PoseMotion:
         "name":        "<str>",
         "model":       "<path to the .blend holding the pose assets>",
         "seed":        <int>,
-        "duration_ns": <int>,
-        "duration_s":  <float>,   -- derived, for reading at a glance
+        "duration_ns": <int>,     -- nanoseconds, the canonical timeline length
         "event_count": <int>,     -- derived, equals len(events)
         "events":      [<PoseEvent dict>, ...]
       }
@@ -137,15 +134,14 @@ class PoseMotion:
         return seen
 
     def to_dict(self) -> dict:
-        # duration_s and event_count are derived from the fields above; they are
-        # written so the file states its own length and size without arithmetic,
-        # and are recomputed on every write rather than trusted on read.
+        # event_count is derived from the events below; it is written so the file
+        # states its own size without counting, and is recomputed on every write
+        # rather than trusted on read.
         return {
             "name": self.name,
             "model": self.model,
             "seed": self.seed,
             "duration_ns": int(self.duration_ns),
-            "duration_s": round(self.duration_ns / NS_PER_SECOND, 6),
             "event_count": self.event_count,
             "events": [e.to_dict() for e in self.events],
         }
@@ -233,7 +229,6 @@ def sample_pose_motion(
     *,
     name: str = "animation",
     event_count: int = DEFAULT_EVENT_COUNT,
-    blend_ns: int = int(DEFAULT_BLEND_SECONDS * NS_PER_SECOND),
     seed: int | None = None,
     model: str | None = None,
     rest_asset: str | None = None,
@@ -250,17 +245,18 @@ def sample_pose_motion(
     [0, T] — so drawing uniforms and sorting them is not an approximation of the
     process, it is the process with its count fixed.
 
-    The first pose is keyed at t=0 and counts toward *event_count*, so the
-    timeline never opens mid-interpolation; the remaining ones fall anywhere in
-    (0, duration_ns].  There is no minimum spacing: poses may land arbitrarily
-    close together, and each transition is shortened to fit the gap it has.
+    The first pose is keyed at t=0 and the last at duration_ns, so motion spans
+    the whole clip and no frames are left frozen at either end; the remaining
+    ones fall anywhere in between.  No pose is ever drawn twice in a row, since
+    an event that changes nothing would freeze every frame until the next one.
+    There is no minimum spacing: poses may land arbitrarily close together, and
+    the armature simply moves faster to reach the next one in time.
 
     Args:
         assets:      Pose assets available to draw from.
         duration_ns: Length of the timeline in nanoseconds.
         name:        Name recorded in the description.
         event_count: Exact number of poses, including the one at t=0.
-        blend_ns:    Requested transition duration; clipped to the preceding gap.
         seed:        Seed for reproducibility; None draws a random one.
         model:       Path to the .blend the assets came from, recorded for reference.
         rest_asset:  Asset to key at t=0; defaults to a random one.
@@ -283,12 +279,11 @@ def sample_pose_motion(
         seed = random.randrange(2**31)
     rng = random.Random(seed)
 
-    def make(t_ns: int, asset: PoseAsset, blend: int) -> PoseEvent:
+    def make(t_ns: int, asset: PoseAsset) -> PoseEvent:
         return PoseEvent(
             t_ns=t_ns,
             asset=asset.name,
             kind=asset.kind,
-            blend_ns=blend,
             duration_ns=asset.duration_ns,
             source_frames=(asset.frame_start, asset.frame_end) if asset.is_action else None,
         )
@@ -297,22 +292,34 @@ def sample_pose_motion(
     start = next((a for a in assets if a.name == rest_asset), None) if rest_asset else rng.choice(assets)
     if start is None:
         raise ValueError(f"rest_asset {rest_asset!r} is not among the available assets")
-    events = [make(0, start, 0)]
+    events = [make(0, start)]
 
-    # Order statistics of uniform draws: the arrival times of the conditioned process.
-    for t_ns in sorted(rng.randrange(1, duration_ns + 1) for _ in range(event_count - 1)):
-        events.append(make(t_ns, rng.choice(assets), blend_ns))
+    # Interior times are the order statistics of uniform draws — the arrival times
+    # of the conditioned process.  The final event is pinned to the end of the
+    # timeline instead of being drawn: uniform placement leaves the clip ending
+    # part way through, and whatever pose was last reached then freezes for the
+    # remainder.  Sampled freely, that dead tail averages a quarter of a
+    # four-event clip.
+    times = sorted(rng.randrange(1, max(2, duration_ns)) for _ in range(max(0, event_count - 2)))
+    if event_count > 1:
+        times.append(duration_ns)
 
-    # Fit each event into the gap it actually got.  Without a minimum spacing two
-    # poses can land close together, and a transition longer than the gap would
-    # otherwise start before the previous pose was reached.
+    previous = start.name
+    for t_ns in times:
+        # Never draw the pose that is already showing: an event that changes
+        # nothing freezes every frame until the next one.
+        pool = [a for a in assets if a.name != previous] or assets
+        asset = rng.choice(pool)
+        events.append(make(t_ns, asset))
+        previous = asset.name
+
+    # A multi-frame asset cannot play for longer than the gap it was given, or
+    # its playback would run past the pose that follows it.
     for i, event in enumerate(events):
+        if event.kind != "action":
+            continue
         following = events[i + 1].t_ns if i + 1 < len(events) else duration_ns
-        gap = max(0, following - event.t_ns)
-        if event.kind == "action":
-            event.duration_ns = min(event.duration_ns, gap)
-        if i > 0:
-            event.blend_ns = min(event.blend_ns, event.t_ns - events[i - 1].t_ns)
+        event.duration_ns = min(event.duration_ns, max(0, following - event.t_ns))
 
     return PoseMotion(
         name=name,

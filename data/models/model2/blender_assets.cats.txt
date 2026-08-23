@@ -1,0 +1,13 @@
+# SPDX-FileCopyrightText: 2026 Yutong Wan
+# SPDX-License-Identifier: BSD-3-Clause
+#
+# This is an Asset Catalog Definition file for Blender.
+#
+# Empty lines and lines starting with `#` will be ignored.
+# The first non-ignored line should be the version indicator.
+# Other lines are of the format "UUID:catalog/path/for/assets:simple catalog name"
+
+VERSION 1
+
+497c9825-4456-4d6f-92fc-e4c7705eb04d:Pose:Pose
+ea67a799-6a35-4703-b291-bf017b726ee1:Pose/hand:Pose-hand

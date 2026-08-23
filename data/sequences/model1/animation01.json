@@ -1,0 +1,49 @@
+{
+  "name": "animation01",
+  "model": "data/models/model1/model1.blend",
+  "seed": 1247764485,
+  "duration_ns": 4000000000,
+  "event_count": 8,
+  "events": [
+    {
+      "t_ns": 0,
+      "asset": "Right_fist",
+      "kind": "pose"
+    },
+    {
+      "t_ns": 1037080396,
+      "asset": "Right_one.002",
+      "kind": "pose"
+    },
+    {
+      "t_ns": 1643350033,
+      "asset": "Left_three",
+      "kind": "pose"
+    },
+    {
+      "t_ns": 2150030133,
+      "asset": "Right_rock2",
+      "kind": "pose"
+    },
+    {
+      "t_ns": 2870154213,
+      "asset": "Right_four",
+      "kind": "pose"
+    },
+    {
+      "t_ns": 3328932588,
+      "asset": "Right_one.002",
+      "kind": "pose"
+    },
+    {
+      "t_ns": 3495082925,
+      "asset": "Right_rock2",
+      "kind": "pose"
+    },
+    {
+      "t_ns": 4000000000,
+      "asset": "Right_fist",
+      "kind": "pose"
+    }
+  ]
+}

@@ -11,8 +11,8 @@ metacarpals are omitted, which leaves exactly 21 joints:
     Index / Middle / Ring / Little:  Proximal, Intermediate, Distal, Tip
 
 Two rigs are supported, each with its own bone naming:
-  * the standalone hand rig (hand.blend)      -> HAND_LANDMARKS
-  * the Rigify full-body rig (cmale1.blend)   -> rigify_hand_landmarks(side)
+  * the standalone hand rig                    -> HAND_LANDMARKS
+  * the Rigify full-body rigs in data/models/  -> rigify_hand_landmarks(side)
 
 Kept in a bpy-free module so it can be imported by both render.py (inside
 Blender) and cli.py (regular Python environment).
@@ -65,9 +65,17 @@ _RIGIFY_FINGERS: list[tuple[str, str]] = [
 def rigify_hand_landmarks(side: str) -> list[tuple[str, str, str]]:
     """Return the 21 landmark definitions for one hand of a Rigify body rig.
 
-    ORG- bones are used rather than the animator-facing control bones: they are
-    the canonical joint chain that the deform bones follow, so their head/tail
-    positions are the true anatomical joint locations after posing.
+    DEF- bones are used because they are the ones that actually deform the mesh.
+    The obvious alternative, the ORG- chain, is unreliable once posed: ORG-hand
+    carries two Copy Transforms constraints, one from the FK chain and one from
+    the IK chain, blended by the arm's IK/FK switch.  When an arm is in IK the
+    ORG bone can end up centimetres from the hand it is supposed to represent
+    (measured: 6.4 cm on one arm, 0 cm on the other, from the same pose).  DEF
+    bones follow the tweak bones and therefore the mesh.
+
+    The two chains are identical in the rest pose and agree on 41 of the 42
+    landmarks even when posed, so this only changes the wrist — but it changes
+    it from wrong to right.
 
     Args:
         side: "left"/"L" or "right"/"R" (case-insensitive).
@@ -88,18 +96,18 @@ def rigify_hand_landmarks(side: str) -> list[tuple[str, str, str]]:
         raise ValueError(f"side must be 'left' or 'right', got {side!r}")
 
     landmarks: list[tuple[str, str, str]] = [
-        ("Wrist", "arm_head", f"ORG-hand.{suffix}"),
-        ("ThumbMetacarpal", "arm_head", f"ORG-thumb.01.{suffix}"),
-        ("ThumbProximal", "arm_head", f"ORG-thumb.02.{suffix}"),
-        ("ThumbDistal", "arm_head", f"ORG-thumb.03.{suffix}"),
-        ("ThumbTip", "arm_tail", f"ORG-thumb.03.{suffix}"),
+        ("Wrist", "arm_head", f"DEF-hand.{suffix}"),
+        ("ThumbMetacarpal", "arm_head", f"DEF-thumb.01.{suffix}"),
+        ("ThumbProximal", "arm_head", f"DEF-thumb.02.{suffix}"),
+        ("ThumbDistal", "arm_head", f"DEF-thumb.03.{suffix}"),
+        ("ThumbTip", "arm_tail", f"DEF-thumb.03.{suffix}"),
     ]
     for openxr_name, chain in _RIGIFY_FINGERS:
         landmarks += [
-            (f"{openxr_name}Proximal", "arm_head", f"ORG-{chain}.01.{suffix}"),
-            (f"{openxr_name}Intermediate", "arm_head", f"ORG-{chain}.02.{suffix}"),
-            (f"{openxr_name}Distal", "arm_head", f"ORG-{chain}.03.{suffix}"),
-            (f"{openxr_name}Tip", "arm_tail", f"ORG-{chain}.03.{suffix}"),
+            (f"{openxr_name}Proximal", "arm_head", f"DEF-{chain}.01.{suffix}"),
+            (f"{openxr_name}Intermediate", "arm_head", f"DEF-{chain}.02.{suffix}"),
+            (f"{openxr_name}Distal", "arm_head", f"DEF-{chain}.03.{suffix}"),
+            (f"{openxr_name}Tip", "arm_tail", f"DEF-{chain}.03.{suffix}"),
         ]
     return landmarks
 
