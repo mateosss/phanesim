@@ -3,46 +3,100 @@
   "$id": "camera.json",
   "title": "Camera",
   "type": "object",
-  "required": ["T_b_c", "intrinsics", "resolution", "pixel_format", "shutter", "exposure", "gain"],
+  "required": [
+    "intrinsics",
+    "resolution",
+    "pixel_format",
+    "shutter"
+  ],
   "additionalProperties": false,
   "properties": {
-    "name": {"type": "string"},
-    "T_b_c": {"$ref": "defs.json#/$defs/transform"},
+    "name": {
+      "type": "string"
+    },
     "intrinsics": {
       "type": "object",
-      "required": ["name", "parameters"],
+      "required": [
+        "name",
+        "parameters"
+      ],
       "additionalProperties": false,
       "properties": {
-        "name": {"type": "string"},
+        "name": {
+          "type": "string"
+        },
         "parameters": {
           "type": "object",
-          "additionalProperties": {"type": "number"}
+          "additionalProperties": {
+            "type": "number"
+          }
         }
       }
     },
     "resolution": {
       "type": "array",
-      "items": {"type": "integer", "minimum": 1},
+      "items": {
+        "type": "integer",
+        "minimum": 1
+      },
       "minItems": 2,
       "maxItems": 2
     },
-    "frequency": {
+    "pixel_format": {
+      "type": "string",
+      "enum": [
+        "RGB24",
+        "MONO8"
+      ]
+    },
+    "shutter": {
+      "type": "string",
+      "enum": [
+        "global"
+      ],
+      "description": "Shutter model. Only 'global' is implemented; 'rolling' is accepted by the schema as a placeholder and rejected at render time."
+    },
+    "motion_blur": {
+      "type": "boolean"
+    },
+    "ca_factor": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Chromatic Aberration node Factor [0-1+]"
+    },
+    "distortion": {
+      "type": "number",
+      "description": "Lens Distortion node Distortion [-1, 1]; negative = pincushion, positive = barrel"
+    },
+    "dispersion": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Lens Distortion node Dispersion [0-1]"
+    },
+    "lens_scale": {
       "type": "number",
       "exclusiveMinimum": 0,
-      "description": "Sampling rate in Hz. Only used when the sequence does not declare a frame count; body sequences normally set \"frames\" instead. Defaults to 10."
+      "description": "Transform Scale after distortion to crop black borders (e.g. 1.2)"
     },
-    "pixel_format": {"type": "string", "enum": ["RGB24", "MONO8"]},
-    "shutter": {"type": "string", "enum": ["global"]},
-    "exposure": {"type": "integer"},
-    "gain": {"type": "integer"},
-    "motion_blur": {"type": "boolean"},
-    "ca_factor": {"type": "number", "minimum": 0, "description": "Chromatic Aberration node Factor [0-1+]"},
-    "distortion": {"type": "number", "description": "Lens Distortion node Distortion [-1, 1]; negative = pincushion, positive = barrel"},
-    "dispersion": {"type": "number", "minimum": 0, "description": "Lens Distortion node Dispersion [0-1]"},
-    "lens_scale": {"type": "number", "exclusiveMinimum": 0, "description": "Transform Scale after distortion to crop black borders (e.g. 1.2)"},
-    "vignette_factor": {"type": "number", "minimum": 0, "description": "Vignette node Factor [0-1]"},
-    "vignette_feather": {"type": "number", "minimum": 0, "description": "Vignette node Feather [0-1]"},
-    "noise_std": {"type": "number", "minimum": 0, "description": "Sensor Noise node Luminance Noise [0-1+]; 0 disables the node"},
-    "chroma_noise": {"type": "number", "minimum": 0, "description": "Sensor Noise node Chroma Noise [0-1+]"}
+    "vignette_factor": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Vignette node Factor [0-1]"
+    },
+    "vignette_feather": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Vignette node Feather [0-1]"
+    },
+    "noise_std": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Sensor Noise node Luminance Noise [0-1+]; 0 disables the node"
+    },
+    "chroma_noise": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Sensor Noise node Chroma Noise [0-1+]"
+    }
   }
 }

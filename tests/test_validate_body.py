@@ -15,14 +15,10 @@ from phanesim.validate import (
 )
 
 _CAMERA = {
-    "T_b_c": {"pos": [0.0, 0.0, 0.0], "quat": [0.0, 0.0, 0.0, 1.0]},
     "intrinsics": {"name": "pinhole", "parameters": {"fx": 240.0, "fy": 240.0, "cx": 320.0, "cy": 240.0}},
     "resolution": [640, 480],
-    "frequency": 10.0,
     "pixel_format": "MONO8",
     "shutter": "global",
-    "exposure": 0,
-    "gain": 0,
 }
 
 _BODY_RIG = {
@@ -37,7 +33,7 @@ _BODY_RIG = {
 
 _BODY_SEQUENCE = {
     "name": "poisson",
-    "output_path": "poisson",
+    "frames": 21,
     "body_rig": _BODY_RIG,
     "hand_motions": ["animation01.json"],
 }
@@ -99,6 +95,12 @@ class TestBodyRig:
 class TestBodySequence:
     def test_valid(self, tmp_path):
         validate_body_sequence(_write(tmp_path, "s.json", _BODY_SEQUENCE))
+
+    def test_frames_is_required(self, tmp_path):
+        # The frame count is the only way to say how much to render.
+        data = {k: v for k, v in _BODY_SEQUENCE.items() if k != "frames"}
+        with pytest.raises(jsonschema.ValidationError):
+            validate_body_sequence(_write(tmp_path, "s.json", data))
 
     def test_hand_motions_required(self, tmp_path):
         data = {k: v for k, v in _BODY_SEQUENCE.items() if k != "hand_motions"}

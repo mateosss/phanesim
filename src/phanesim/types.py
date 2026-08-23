@@ -43,14 +43,10 @@ class Shutter(enum.Enum):
 @dataclass
 class Camera:
     name: str | None
-    T_b_c: Transform  # transform from camera frame to body/rig frame
     intrinsics: CameraModel
     resolution: tuple[int, int]  # (w, h)
-    frequency: float  # fps in Hz
     pixel_format: str  # e.g. GRAY8, GRAY12, RGB24, YUYV422
-    shutter: Shutter
-    exposure: int  # nanoseconds; 0=none, -1=auto
-    gain: int  # 0=none, -1=auto
+    shutter: Shutter  # only GLOBAL is implemented; ROLLING raises at render time
     motion_blur: bool = False
     # Compositor node parameters — values match Blender node inputs directly
     ca_factor: float = 0.30  # Chromatic Aberration → Factor
@@ -61,17 +57,6 @@ class Camera:
     vignette_feather: float = 0.4  # Vignette → Feather
     noise_std: float = 0.0  # Sensor Noise → Luminance Noise (0 = node disabled)
     chroma_noise: float = 0.0  # Sensor Noise → Chroma Noise
-
-
-@dataclass
-class Hand:
-    model: Path  # path to mesh and rig file
-    name: str | None = None
-    scale_length: float = 1.0
-    scale_breadth: float = 1.0
-    scale_thickness: float = 1.0
-    texture: Path | None = None
-    color_multiply: Color | None = None
 
 
 @dataclass
