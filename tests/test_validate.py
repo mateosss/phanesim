@@ -23,6 +23,7 @@ _CAMERA = {
     "shutter": "global",
 }
 
+
 def _write(tmp_path, data: dict, name: str = "data.json"):
     p = tmp_path / name
     p.write_text(json.dumps(data))
