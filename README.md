@@ -176,89 +176,188 @@ class Project:
 
 ## CLI
 
-The CLI will have the following commands:
+Four commands:
 
-```bash
-# Validate commands check the json schemas of each json file, and return ok if they are valid
-./phanesim validate camera camera.json
-./phanesim validate camera_motion cam_motion.csv
-./phanesim validate hand_motion hand_motion.csv
-./phanesim validate hand hand.json
-./phanesim validate camhand_rig rig.json
-./phanesim validate sequence sequence.json
-./phanesim validate project project.json
+| Command | What it does |
+|---|---|
+| `generate-motion` | **Step 1.** Invents a random timeline of poses and writes it as `animationNN.json`. |
+| `generate` | **Step 2.** Renders that timeline to PNG frames plus `joints_2d.csv`. |
+| `preview` | Builds the animation into a `.blend` you can open in Blender. Renders nothing. |
+| `validate` | Checks that a JSON file matches its schema. |
 
-# Render can render either a sequence or a project (set of sequences)
-# generates the sequence: renders images and csv with groundtruth 2d joint positions
-./phanesim generate sequence sequence.json --output output_sequence_folder
+The models live in `data/models/model1/` and `data/models/model2/`. Each is a
+full body with an armature and a set of **pose assets** — hand poses authored in
+Blender and marked as assets.
 
-# Render PNG frames to disk (headless rendering)
-uv run phanesim generate sequence data/sequences/minimal/sequence.json --output output_folder
+Making a dataset is two steps: first decide *when* each pose happens, then render
+it. The two are separate because a timeline takes a second to make, while
+rendering it takes minutes.
 
-# Save the render immediately for preview in Blender GUI
-uv run phanesim preview sequence data/sequences/minimal/sequence.json --output preview1.blend
-
-# after rendering, reads joints_2d.csv and overlays the 21-landmark skeleton on each frame
-uv run phanesim generate sequence data/sequences/minimal/sequence.json --output output_folder --debug_kps
-
-./phanesim generate project project.json --output output_project_folder
-# generates all the sequences in the project, each in a separate folder under output_project_folder
-```
-
-## Body sequences: pose assets and random motion
-
-The full-body models (`data/cmale1.blend`, `data/cfemale1.blend`) are animated by
-combining **pose assets** — poses and animations authored in Blender and marked
-as assets. Generation is two steps: *when* poses happen is decided separately
-from *what the bones do*.
-
-### 1. Generate motion descriptions
+### Step 1 — make a motion description
 
 ```bash
 # 4 poses in 1 second
-uv run phanesim generate-motion --model data/cmale1.blend \
-    --output data/sequences/poisson_male --events 4 --duration 1
+uv run phanesim generate-motion --model data/models/model1/model1.blend \
+    --output data/sequences/model1 --events 4 --duration 1
 
-# 10 poses over 20 seconds, 5 different takes
-uv run phanesim generate-motion --model data/cmale1.blend \
-    --output data/sequences/poisson_male --events 10 --duration 20 --count 5
+# 10 poses over 20 seconds, as 5 separate files
+uv run phanesim generate-motion --model data/models/model1/model1.blend \
+    --output data/sequences/model1 --events 10 --duration 20 --count 5
 ```
 
-You give the exact pose count and the length; only *which* poses and *when* they
-land are random. Writes `animation01.json`, `animation02.json`, … Each holds the
-timeline and no bone data — the poses stay in the `.blend` until render time.
+You choose how many poses and how long. Only *which* poses and *when* they land
+are random. This writes `animation01.json`, `animation02.json`, … Each file holds
+only the timeline — no bone data, because the poses stay in the `.blend`.
 
 ```json
 {
-  "duration_s": 1.0,
-  "event_count": 4,
+  "duration_ns": 4000000000,
+  "event_count": 3,
   "events": [
-    {"t_ns": 0,         "asset": "Right_fist",   "kind": "pose", "blend_ns": 0},
-    {"t_ns": 380000000, "asset": "Left_ThumbUp", "kind": "pose", "blend_ns": 380000000}
+    {"t_ns": 0,          "asset": "Right_fist",    "kind": "pose"},
+    {"t_ns": 1040000000, "asset": "Right_one.002", "kind": "pose"},
+    {"t_ns": 4000000000, "asset": "Left_three",    "kind": "pose"}
   ]
 }
 ```
 
-An event names the pose reached at `t_ns`; the transition into it starts
-`blend_ns` earlier. Every run differs — pass `--seed` to reproduce one exactly.
+Each event says which pose is reached at `t_ns` nanoseconds. The body moves
+continuously from one pose to the next, so no two frames look the same. Three
+rules keep it that way: the first pose is at `t=0`, the last is at `duration_ns`,
+and the same pose is never used twice in a row.
 
-Times are placed as the order statistics of uniform draws on `[0, duration]`,
-which is a Poisson process conditioned on its event count.
+The same command always gives the same result (`--seed 42` by default). Pass a
+different `--seed` to get a different timeline.
 
-### 2. Render
+### Step 2 — render
 
 ```bash
-uv run phanesim generate body_sequence data/sequences/male/sequence.json \
+uv run phanesim generate body_sequence data/sequences/model1/sequence.json \
     --frames 81 --output output_folder
 
-uv run phanesim preview body_sequence data/sequences/male/sequence.json \
+# add the keypoint overlay to check the ground truth visually
+uv run phanesim generate body_sequence data/sequences/model1/sequence.json \
+    --frames 81 --output output_folder --debug_kps
+```
+
+This writes to `output_folder/cam_<name>/`:
+
+- `frame_000000.png`, `frame_000001.png`, … the rendered images
+- `joints_2d.csv` — the 21 hand landmarks per hand, in pixels, for every frame
+- `frame_000000_debug.png`, … only with `--debug_kps`: the same images with the
+  skeleton drawn on top
+- `joints_3d.csv` — only with `--debug_kps`: the same 21 landmarks per hand in
+  world space, as position `x, y, z` plus rotation `qx, qy, qz, qw`
+
+`--frames N` renders N frames spread evenly across the whole motion, so
+`--frames 2` gives the first and last frame, and any number still covers the
+entire animation. Use a small number to check something quickly and a large one
+for the real dataset. Rendering takes roughly 5 seconds per frame.
+
+### Preview — look at it in Blender
+
+```bash
+uv run phanesim preview body_sequence data/sequences/model1/sequence.json \
     --frames 15 --output preview.blend
 ```
 
-`--frames N` renders N frames spread evenly over the whole motion, so `--frames 2`
-gives the first and last frame and any count still shows the entire animation. Set
-it once in `sequence.json` (`"frames": 81`) or override it per run by the `--frames N`; the effective rate is reported and never something you configure.
+**`preview` does not render any images.** It builds the animation and camera into
+a `.blend` file and stops. Open that file in Blender to scrub the timeline, check
+where the camera is pointing, and adjust the compositor nodes by hand. It takes
+seconds instead of minutes, so use it to check a setup before committing to a
+full render with `generate`.
 
-The sequence's `hand_motions` lists the animation JSONs to render. With one entry
-the output layout matches a normal sequence; with several, each becomes its own
-take under `<output>/<animation name>/`.
+### The sequence file — you edit this one by hand
+
+`sequence.json` is the only file in the workflow that **nothing writes for you**.
+`generate-motion` creates `animationNN.json` files but never touches
+`sequence.json`. If you want a render to use a different animation, you open the
+file and change the name yourself.
+
+```json
+{
+  "name": "model1",
+  "output_path": "model1",
+  "body_rig": {
+    "cameras":     [ "... resolution, lens, noise, distortion ..." ],
+    "body":        { "model": "../../models/model1/model1.blend" },
+    "head_camera": { "rest_position": [0.0, -0.21, 1.715] }
+  },
+  "hand_motions": ["animation01.json"],
+  "frames": 21,
+  "hdri": "../../hdri/brown_photostudio_02_2k.exr"
+}
+```
+
+#### Switching to another animation
+
+Say you generated five takes with `--count 5`:
+
+```
+data/sequences/model1/
+    sequence.json
+    animation01.json     <- the one being rendered
+    animation02.json
+    animation03.json
+    animation04.json
+    animation05.json
+```
+
+`generate` renders whatever `hand_motions` lists. To render `animation03.json`
+instead, edit that line:
+
+```json
+  "hand_motions": ["animation01.json"],      // before
+  "hand_motions": ["animation03.json"],      // after
+```
+
+To render several takes in one command, list them all. Each gets its own folder
+named after the animation:
+
+```json
+  "hand_motions": ["animation01.json", "animation02.json", "animation03.json"]
+```
+
+```
+output_folder/
+    animation01/cam_head0/frame_000000.png ...
+    animation02/cam_head0/frame_000000.png ...
+    animation03/cam_head0/frame_000000.png ...
+```
+
+With a single entry there is no extra folder — the frames go straight into
+`output_folder/cam_head0/`.
+
+⚠ The file names are relative to the `sequence.json`, so the animation files must
+sit in the same folder.
+
+#### The other fields
+
+- **`body.model`** — which model to use, relative to this file.
+- **`head_camera.rest_position`** — where the camera sits on the head. Measured
+  per model, and different for each one because the models are different heights.
+  `model1` uses `[0.0, -0.21, 1.715]`, `model2` uses `[0.0, -0.19, 1.564]`.
+- **`head_camera.rest_forward`** — where it looks. The camera is bolted to the
+  head like a real headset and never turns to follow the hands, so they move in
+  and out of view on their own. `[0.0, -1.0, -0.268]` points forward and 15
+  degrees down, at the space where the hands are.
+- **`frames`** — default frame count. `--frames` on the command line wins.
+- **`cameras`** — resolution, focal length, and the artifact settings (noise,
+  distortion, vignette).
+
+After editing, check the file is still valid:
+
+```bash
+uv run phanesim validate body_sequence data/sequences/model1/sequence.json
+```
+
+### Validate
+
+```bash
+uv run phanesim validate body_sequence data/sequences/model1/sequence.json
+uv run phanesim validate pose_motion data/sequences/model1/animation01.json
+uv run phanesim validate camera        camera.json
+```
+
+Prints `OK` or the reason the file is wrong. Useful after editing a
+`sequence.json` by hand.

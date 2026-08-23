@@ -79,7 +79,6 @@ class TestSamplePoseMotion:
         # Without a key at t=0 the first frames would open mid-interpolation.
         motion = sample_pose_motion(POSES, 30 * NS_PER_SECOND, seed=5)
         assert motion.events[0].t_ns == 0
-        assert motion.events[0].blend_ns == 0
 
     @pytest.mark.parametrize("n", [1, 2, 4, 10, 50])
     def test_event_count_is_exact(self, n):
@@ -93,13 +92,6 @@ class TestSamplePoseMotion:
         motion = sample_pose_motion(POSES, NS_PER_SECOND, seed=1, event_count=4)
         assert motion.event_count == 4
         assert all(0 <= e.t_ns <= NS_PER_SECOND for e in motion.events)
-
-    def test_blend_never_exceeds_the_preceding_gap(self):
-        # Poses may land close together; a transition longer than its gap would
-        # start before the previous pose was reached.
-        motion = sample_pose_motion(POSES, 2 * NS_PER_SECOND, seed=4, event_count=40, blend_ns=NS_PER_SECOND // 2)
-        for prev, nxt in itertools.pairwise(motion.events):
-            assert nxt.blend_ns <= nxt.t_ns - prev.t_ns
 
     def test_action_playback_is_clipped_to_its_gap(self):
         motion = sample_pose_motion([WAVE], 4 * NS_PER_SECOND, seed=4, event_count=20)
@@ -187,3 +179,39 @@ class TestPoseMotionIO:
     def test_summary_lists_every_event(self):
         motion = sample_pose_motion(POSES + [WAVE], 60 * NS_PER_SECOND, seed=8)
         assert len(motion.summary().splitlines()) == len(motion.events)
+
+
+class TestContinuousMotion:
+    """No frame should ever be identical to its neighbour.
+
+    Two sampler properties guarantee it: the timeline ends on an event rather
+    than part way through, and no pose is ever drawn twice in a row.
+    """
+
+    @pytest.mark.parametrize("n", [2, 3, 8, 30])
+    def test_last_event_lands_on_the_end(self, n):
+        # Otherwise the final pose freezes for the remainder of the clip.
+        motion = sample_pose_motion(POSES, 2 * NS_PER_SECOND, seed=n, event_count=n)
+        assert motion.events[-1].t_ns == motion.duration_ns
+
+    def test_single_event_has_no_tail_to_pin(self):
+        motion = sample_pose_motion(POSES, 2 * NS_PER_SECOND, seed=1, event_count=1)
+        assert [e.t_ns for e in motion.events] == [0]
+
+    @pytest.mark.parametrize("seed", range(25))
+    def test_no_pose_repeats_back_to_back(self, seed):
+        motion = sample_pose_motion(POSES, 5 * NS_PER_SECOND, seed=seed, event_count=12)
+        assets = [e.asset for e in motion.events]
+        assert all(a != b for a, b in itertools.pairwise(assets)), assets
+
+    def test_a_single_available_asset_still_terminates(self):
+        # With nothing else to pick, repeats are unavoidable and must be allowed.
+        only = [PoseAsset(name="Solo", frame_start=1, frame_end=1)]
+        motion = sample_pose_motion(only, NS_PER_SECOND, seed=1, event_count=4)
+        assert motion.event_count == 4
+        assert {e.asset for e in motion.events} == {"Solo"}
+
+    def test_event_count_is_still_exact_with_both_rules(self):
+        for n in (1, 2, 5, 40):
+            m = sample_pose_motion(POSES, 3 * NS_PER_SECOND, seed=n, event_count=n)
+            assert m.event_count == n

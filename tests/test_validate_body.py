@@ -27,14 +27,11 @@ _CAMERA = {
 
 _BODY_RIG = {
     "cameras": [_CAMERA],
-    "body": {"model": "cmale1.blend", "armature": "rig", "hands": ["right", "left"]},
+    "body": {"model": "../../models/model1/model1.blend", "armature": "rig", "hands": ["right", "left"]},
     "head_camera": {
         "anchor_bone": "ORG-spine.006",
         "rest_position": [0.0, -0.21, 1.715],
-        "rest_forward": [0.0, -1.0, 0.0],
-        "track_hands": ["right", "left"],
-        "track_landmark": "MiddleProximal",
-        "max_deviation_deg": 35.0,
+        "rest_forward": [0.0, -1.0, -0.268],
     },
 }
 
@@ -49,8 +46,8 @@ _POSE_MOTION = {
     "name": "animation01",
     "duration_ns": 8_000_000_000,
     "events": [
-        {"t_ns": 0, "asset": "Left_default", "kind": "pose", "blend_ns": 0},
-        {"t_ns": 1_500_000_000, "asset": "hand_wave", "kind": "pose", "blend_ns": 500_000_000},
+        {"t_ns": 0, "asset": "Left_default", "kind": "pose"},
+        {"t_ns": 1_500_000_000, "asset": "hand_wave", "kind": "pose"},
     ],
 }
 
@@ -84,29 +81,19 @@ class TestBodyRig:
         with pytest.raises(jsonschema.ValidationError):
             validate_body_rig(_write(tmp_path, "r.json", data))
 
+    def test_aiming_fields_are_rejected(self, tmp_path):
+        # The camera is rigid; a config that still asks it to follow the hands
+        # should fail loudly rather than be silently ignored.
+        for dead in ("track_hands", "track_landmark", "max_deviation_deg"):
+            head = {**_BODY_RIG["head_camera"], dead: ["left"] if dead == "track_hands" else 1}
+            with pytest.raises(jsonschema.ValidationError):
+                validate_body_rig(_write(tmp_path, "r.json", {**_BODY_RIG, "head_camera": head}))
+
     def test_rest_position_must_be_3d(self, tmp_path):
         head = {**_BODY_RIG["head_camera"], "rest_position": [0.0, -0.21]}
         data = {**_BODY_RIG, "head_camera": head}
         with pytest.raises(jsonschema.ValidationError):
             validate_body_rig(_write(tmp_path, "r.json", data))
-
-    def test_track_hands_accepts_a_single_side(self, tmp_path):
-        head = {**_BODY_RIG["head_camera"], "track_hands": ["left"]}
-        validate_body_rig(_write(tmp_path, "r.json", {**_BODY_RIG, "head_camera": head}))
-
-    def test_track_hands_rejects_unknown_side(self, tmp_path):
-        head = {**_BODY_RIG["head_camera"], "track_hands": ["both"]}
-        with pytest.raises(jsonschema.ValidationError):
-            validate_body_rig(_write(tmp_path, "r.json", {**_BODY_RIG, "head_camera": head}))
-
-    def test_max_deviation_is_bounded(self, tmp_path):
-        head = {**_BODY_RIG["head_camera"], "max_deviation_deg": 120.0}
-        with pytest.raises(jsonschema.ValidationError):
-            validate_body_rig(_write(tmp_path, "r.json", {**_BODY_RIG, "head_camera": head}))
-
-    def test_zero_deviation_is_a_rigid_forward_camera(self, tmp_path):
-        head = {**_BODY_RIG["head_camera"], "max_deviation_deg": 0.0}
-        validate_body_rig(_write(tmp_path, "r.json", {**_BODY_RIG, "head_camera": head}))
 
 
 class TestBodySequence:
@@ -163,7 +150,6 @@ class TestPoseMotion:
                     "t_ns": 0,
                     "asset": "Wave_Animation",
                     "kind": "action",
-                    "blend_ns": 0,
                     "duration_ns": 1_666_666_666,
                     "source_frames": [1, 41],
                 }

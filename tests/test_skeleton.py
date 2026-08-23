@@ -74,20 +74,25 @@ class TestRigifyHandLandmarks:
 
     def test_thumb_chain_maps_onto_rigify_numbering(self):
         bones = dict((name, bone) for name, _, bone in rigify_hand_landmarks("right"))
-        assert bones["ThumbMetacarpal"] == "ORG-thumb.01.R"
-        assert bones["ThumbProximal"] == "ORG-thumb.02.R"
-        assert bones["ThumbDistal"] == "ORG-thumb.03.R"
-        assert bones["ThumbTip"] == "ORG-thumb.03.R"
+        assert bones["ThumbMetacarpal"] == "DEF-thumb.01.R"
+        assert bones["ThumbProximal"] == "DEF-thumb.02.R"
+        assert bones["ThumbDistal"] == "DEF-thumb.03.R"
+        assert bones["ThumbTip"] == "DEF-thumb.03.R"
 
     def test_little_finger_maps_to_rigify_pinky(self):
         bones = dict((name, bone) for name, _, bone in rigify_hand_landmarks("right"))
-        assert bones["LittleProximal"] == "ORG-f_pinky.01.R"
-        assert bones["LittleTip"] == "ORG-f_pinky.03.R"
+        assert bones["LittleProximal"] == "DEF-f_pinky.01.R"
+        assert bones["LittleTip"] == "DEF-f_pinky.03.R"
 
     def test_distal_and_tip_share_a_bone(self):
         bones = dict((name, bone) for name, _, bone in rigify_hand_landmarks("left"))
         for finger in ("Thumb", "Index", "Middle", "Ring", "Little"):
             assert bones[f"{finger}Distal"] == bones[f"{finger}Tip"]
+
+    def test_uses_deform_bones_not_org(self):
+        # ORG-hand is driven by blended FK and IK constraints and can sit
+        # centimetres from the mesh when an arm is in IK; DEF bones deform it.
+        assert all(bone.startswith("DEF-") for _, _, bone in rigify_hand_landmarks("right"))
 
     def test_bone_names_are_unique_per_landmark_role(self):
         landmarks = rigify_hand_landmarks("right")

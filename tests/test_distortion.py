@@ -93,3 +93,43 @@ class TestLensScale:
         cx = W / 2 - 0.5
         px, _ = distort_pixel(cx + 100, H / 2 - 0.5, W, H, 0.0, 1.2)
         assert px - cx == pytest.approx(120.0, rel=1e-9)
+
+
+class TestOutsideTheValidRadius:
+    """The map turns over at r = 1/sqrt(k) and folds outer points back inward.
+
+    Blender writes a transparent pixel past that radius, so a landmark out there
+    has no position in the rendered image and must be reported as NaN rather
+    than as a plausible-looking coordinate inside the frame.
+    """
+
+    def test_far_outside_is_nan_not_folded_inward(self):
+        # Without the guard this lands near the centre of the image.
+        px, py = distort_pixel(20000, 20000, W, H, 0.387)
+        assert math.isnan(px) and math.isnan(py)
+
+    def test_the_cutoff_is_where_blender_puts_it(self):
+        k = 0.387
+        limit = 1.0 / math.sqrt(k)  # k * r^2 == 1
+        for scale_r, expect_nan in ((0.98, False), (1.02, True)):
+            # place a point along +x at the requested fraction of the limit
+            x = (W / 2 - 0.5) + limit * scale_r * (W / 2)
+            px, _ = distort_pixel(x, H / 2 - 0.5, W, H, k)
+            assert math.isnan(px) is expect_nan
+
+    def test_no_distortion_never_rejects(self):
+        # k = 0 makes the guard vacuous; the identity must hold everywhere.
+        px, py = distort_pixel(50000, -50000, W, H, 0.0)
+        assert px == pytest.approx(50000)
+        assert py == pytest.approx(-50000)
+
+    def test_map_is_monotonic_inside_the_valid_radius(self):
+        k = 0.387
+        limit = 1.0 / math.sqrt(k)
+        prev = -1.0
+        for frac in [i / 50 for i in range(1, 50)]:
+            x = (W / 2 - 0.5) + limit * frac * (W / 2)
+            px, _ = distort_pixel(x, H / 2 - 0.5, W, H, k)
+            assert not math.isnan(px)
+            assert px > prev
+            prev = px
