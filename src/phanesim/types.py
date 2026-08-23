@@ -86,33 +86,28 @@ class Body:
 
 @dataclass
 class HeadCamera:
-    """A forward-facing AR-headset camera rigidly attached to the head.
+    """A camera rigidly bolted to the head, as on a real headset.
 
-    Position: the camera sits at *rest_position*, an absolute world-space point
-    valid while the body is in its rest pose.  Each frame that point is carried
-    through the head bone's rest-to-pose delta, so the camera follows the head
-    exactly as a headset would.  rest_position must sit outside the head mesh —
-    in front of the nose tip rather than inside it.  For cmale1.blend the nose
-    reaches y = -0.174 at eye height, so (0, -0.21, 1.715) clears the face.
+    Both the position and the direction are fixed relative to the skull: the
+    configured rest-pose values are carried through the head bone's
+    rest-to-pose delta every frame, so the camera moves only when the head does.
+    It never turns to follow the hands.
 
-    Orientation: the camera looks along *rest_forward* (also carried through the
-    head delta), then turns toward the tracked hands by at most
-    *max_deviation_deg*.  This is the headset compromise — the view stays
-    fundamentally front-facing, as a device mounted on someone's face must, but
-    still yields enough to keep the hands framed and the subject of the shot.
-    A rigid forward camera would let low or wide poses drift out of frame; an
-    unclamped look-at would swing the head to physically implausible angles.
+    That is deliberate.  Headset cameras (MEgATrack, UmeTrack) are fixed to the
+    device, and hands enter and leave the field of view on their own.  A camera
+    that aimed at the hands would centre them in nearly every frame, which both
+    removes the off-centre and partially-cropped views a tracker has to cope
+    with and correlates the camera pose with the very quantity being predicted.
 
-    Tracking: *track_hands* lists the sides that count as the subject.  With
-    both listed the camera aims at their midpoint, so a left-hand pose, a
-    right-hand pose or a two-handed pose all stay framed without the camera
-    favouring one side.  Hands behind the head are ignored when they would drag
-    the aim backwards.
+    rest_position must sit outside the head mesh — in front of the nose tip
+    rather than inside it.  For model1 the nose reaches y = -0.174 at eye
+    height, so (0, -0.21, 1.715) clears the face.
+
+    rest_forward points where the camera looks in the rest pose.  Hands sit
+    below eye level, so it is normally tilted down: (0, -1, -0.268) is 15
+    degrees below horizontal, which centres the interaction volume.
     """
 
     anchor_bone: str = "ORG-spine.006"  # the head bone of a Rigify rig
     rest_position: Vector3 | None = None  # world-space camera point in rest pose
     rest_forward: Vector3 | None = None  # world-space look direction in rest pose
-    track_hands: tuple[str, ...] = ("right", "left")  # sides treated as the subject
-    track_landmark: str = "MiddleProximal"  # landmark aimed at within each hand
-    max_deviation_deg: float = 35.0  # how far the gaze may leave straight ahead

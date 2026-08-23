@@ -1,13 +1,22 @@
 {
-  "name": "poisson",
-  "output_path": "poisson",
+  "name": "model2",
+  "output_path": "model2",
   "body_rig": {
     "cameras": [
       {
         "name": "head0",
         "T_b_c": {
-          "pos": [0.0, 0.0, 0.0],
-          "quat": [0.0, 0.0, 0.0, 1.0]
+          "pos": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "quat": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
         },
         "intrinsics": {
           "name": "pinhole",
@@ -18,38 +27,51 @@
             "cy": 240.0
           }
         },
-        "resolution": [640, 480],
+        "resolution": [
+          640,
+          480
+        ],
         "frequency": 10.0,
         "pixel_format": "MONO8",
         "shutter": "global",
         "exposure": 0,
         "gain": 0,
-        "ca_factor": 0.30,
+        "ca_factor": 0.3,
         "distortion": 0.387,
         "dispersion": 0.0,
         "lens_scale": 1.2,
         "vignette_factor": 0.533,
         "vignette_feather": 0.4,
-        "noise_std": 0.5,
+        "noise_std": 0.2,
         "chroma_noise": 0.0
       }
     ],
     "body": {
-      "name": "cmale1",
-      "model": "../../cmale1.blend",
+      "name": "model2",
+      "model": "../../models/model2/model2.blend",
       "armature": "rig",
-      "hands": ["right", "left"]
+      "hands": [
+        "right",
+        "left"
+      ]
     },
     "head_camera": {
       "anchor_bone": "ORG-spine.006",
-      "rest_position": [0.0, -0.21, 1.715],
-      "rest_forward": [0.0, -1.0, 0.0],
-      "track_hands": ["right", "left"],
-      "track_landmark": "MiddleProximal",
-      "max_deviation_deg": 35.0
+      "rest_position": [
+        0.0,
+        -0.19,
+        1.564
+      ],
+      "rest_forward": [
+        0.0,
+        -1.0,
+        -0.268
+      ]
     }
   },
-  "hand_motions": ["animation01.json"],
-  "frames": 21,
+  "hand_motions": [
+    "animation01.json"
+  ],
+  "frames": 31,
   "hdri": "../../hdri/brown_photostudio_02_2k.exr"
 }

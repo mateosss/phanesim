@@ -21,11 +21,6 @@
       "exclusiveMinimum": 0,
       "description": "Length of the timeline in nanoseconds."
     },
-    "duration_s": {
-      "type": "number",
-      "exclusiveMinimum": 0,
-      "description": "Derived: duration_ns expressed in seconds, for reading at a glance."
-    },
     "event_count": {
       "type": "integer",
       "minimum": 1,
@@ -55,11 +50,6 @@
         "kind": {
           "enum": ["pose", "action"],
           "description": "'pose' for single-frame assets, 'action' for multi-frame ones."
-        },
-        "blend_ns": {
-          "type": "integer",
-          "minimum": 0,
-          "description": "Duration of the transition that ends at t_ns."
         },
         "duration_ns": {
           "type": "integer",

@@ -20,6 +20,7 @@ import phanesim.validate as val
 from phanesim.posemotion import (
     DEFAULT_DURATION_SECONDS,
     DEFAULT_EVENT_COUNT,
+    DEFAULT_SEED,
     NS_PER_SECOND,
     PoseAsset,
     sample_pose_motion,
@@ -101,6 +102,7 @@ def _overlay_keypoints(output_path: Path) -> None:
         n_hands = max(1, len(uv_pairs) // 21)
 
         frame_paths = sorted(cam_dir.glob("frame_??????.png"))
+        written: list[str] = []
         for frame_path, row in zip(frame_paths, rows, strict=False):
             img = Image.open(frame_path).convert("RGB")
             draw = ImageDraw.Draw(img)
@@ -134,8 +136,11 @@ def _overlay_keypoints(output_path: Path) -> None:
 
             debug_path = frame_path.with_stem(frame_path.stem + "_debug")
             img.save(debug_path)
+            written.append(debug_path.name)
 
-        click.echo(f"[phanesim] Debug keypoints: {len(frame_paths)} frame(s) in {cam_dir}")
+        click.echo(f"[phanesim] Debug keypoints written to {cam_dir}:")
+        for name in written:
+            click.echo(f"  {name}")
 
 
 def _sys_path_setup() -> str:
@@ -235,9 +240,8 @@ def validate(kind: str, input_path: Path) -> None:
     default=False,
     help=(
         "After rendering, overlay the projected 21-landmark hand skeleton on each frame "
-        "and save frame_XXXXXX_debug.png alongside the rendered images. "
-        "Note: keypoint positions are based on camera intrinsics only and do not account "
-        "for the compositor barrel distortion, so the overlay is approximate."
+        "and save frame_XXXXXX_debug.png alongside the rendered images. Also writes "
+        "joints_3d.csv with the world-space position and rotation of every joint."
     ),
 )
 def generate(
@@ -266,6 +270,10 @@ def generate(
         click.echo("Error: --frames is only supported for body_sequence.", err=True)
         sys.exit(1)
     extra = f", frames={frames!r}" if frames is not None else ""
+    if kind == "body_sequence" and debug_kps:
+        # Ground-truth 3D joint poses are only worth the extra file when the
+        # debug pass is asked for; the data itself is already in hand.
+        extra += ", write_3d=True"
     expr = (
         _sys_path_setup()
         + "from pathlib import Path; "
@@ -288,7 +296,7 @@ def generate(
     "model_path",
     type=click.Path(path_type=Path, exists=True),
     required=True,
-    help="Path to the .blend holding the pose assets (e.g. data/cmale1.blend).",
+    help="Path to the .blend holding the pose assets (e.g. data/models/model1/model1.blend).",
 )
 @click.option(
     "--output",
@@ -311,13 +319,14 @@ def generate(
     show_default=True,
     help="Exact number of poses per animation, including the one at t=0.",
 )
-@click.option("--blend", default=0.5, show_default=True, help="Transition duration into each pose, in seconds.")
 @click.option("--rest-asset", default=None, help="Pose to key at t=0. Defaults to a random one.")
 @click.option(
     "--seed",
-    default=None,
+    default=DEFAULT_SEED,
+    show_default=True,
     type=int,
-    help="Seed for the first animation; later ones increment from it. Omit for a random draw.",
+    help="Seed for the first animation; later ones increment from it. "
+    "Generation is reproducible by default; pass a different seed for a different timeline.",
 )
 @click.option("--prefix", default="animation", show_default=True, help="Basename of the generated files.")
 @click.option(
@@ -334,9 +343,8 @@ def generate_motion(
     count: int,
     duration: float,
     event_count: int,
-    blend: float,
     rest_asset: str | None,
-    seed: int | None,
+    seed: int,
     prefix: str,
     blender_bin: str | None,
 ) -> None:
@@ -382,8 +390,7 @@ def generate_motion(
             duration_ns=int(duration * NS_PER_SECOND),
             name=name,
             event_count=event_count,
-            blend_ns=int(blend * NS_PER_SECOND),
-            seed=None if seed is None else seed + i,
+            seed=seed + i,
             model=str(model_path),
             rest_asset=rest_asset,
         )

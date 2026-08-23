@@ -152,11 +152,9 @@ def _head_camera_from_dict(data: dict) -> HeadCamera:
     return HeadCamera(
         anchor_bone=str(data.get("anchor_bone", "ORG-spine.006")),
         rest_position=_vec("rest_position", None),
-        # The body faces -Y in rest pose, so that is where a headset looks.
-        rest_forward=_vec("rest_forward", [0.0, -1.0, 0.0]),
-        track_hands=tuple(data.get("track_hands", ("right", "left"))),
-        track_landmark=str(data.get("track_landmark", "MiddleProximal")),
-        max_deviation_deg=float(data.get("max_deviation_deg", 35.0)),
+        # The body faces -Y in rest pose; the downward component aims at the
+        # interaction volume, where the hands are.
+        rest_forward=_vec("rest_forward", [0.0, -1.0, -0.268]),
     )
 
 

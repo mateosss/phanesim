@@ -42,7 +42,7 @@
     },
     "head_camera": {
       "type": "object",
-      "description": "A forward-facing AR-headset camera rigidly attached to the head, turning toward the tracked hands only within max_deviation_deg.",
+      "description": "A camera rigidly bolted to the head, as on a real headset. It never turns to follow the hands, so they enter and leave the field of view on their own.",
       "additionalProperties": false,
       "properties": {
         "anchor_bone": {
@@ -58,28 +58,10 @@
         },
         "rest_forward": {
           "type": "array",
-          "description": "World-space direction the camera looks while the body is in its rest pose. Defaults to [0, -1, 0], the direction the body faces.",
+          "description": "World-space direction the camera looks while the body is in its rest pose. The body faces -Y, and hands sit below eye level, so this is normally tilted down: [0, -1, -0.268] is 15 degrees below horizontal. Defaults to that.",
           "items": {"type": "number"},
           "minItems": 3,
           "maxItems": 3
-        },
-        "track_hands": {
-          "type": "array",
-          "description": "Hand sides treated as the subject. With both listed the camera aims at their midpoint, so left, right and two-handed poses are all framed.",
-          "items": {"enum": ["left", "right"]},
-          "minItems": 1,
-          "maxItems": 2,
-          "uniqueItems": true
-        },
-        "track_landmark": {
-          "type": "string",
-          "description": "Landmark within each tracked hand that the camera aims at. Defaults to 'MiddleProximal', the middle knuckle, which centres the palm."
-        },
-        "max_deviation_deg": {
-          "type": "number",
-          "minimum": 0,
-          "maximum": 90,
-          "description": "How far the gaze may turn from straight ahead to frame the hands. 0 gives a rigidly forward camera; the default 35 matches a comfortable head turn."
         }
       }
     }
