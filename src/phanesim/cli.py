@@ -7,6 +7,7 @@ import csv
 import json
 import math
 import os
+import random
 import subprocess
 import sys
 import tempfile
@@ -20,7 +21,6 @@ import phanesim.validate as val
 from phanesim.posemotion import (
     DEFAULT_DURATION_SECONDS,
     DEFAULT_EVENT_COUNT,
-    DEFAULT_SEED,
     NS_PER_SECOND,
     PoseAsset,
     sample_pose_motion,
@@ -30,6 +30,81 @@ from phanesim.skeleton import HAND_CONNECTIONS, LANDMARK_COLORS
 # Parent directory of the phanesim package, added to sys.path inside Blender
 # so that `import phanesim` works in the headless rendering subprocess.
 _PKG_PARENT = str(Path(__file__).parent.parent)
+
+
+# Short names the --accessories option accepts, kept in step with
+# render.ACCESSORIES.  Duplicated here rather than imported because cli.py must
+# work outside Blender, where render.py cannot be imported at all.
+ACCESSORY_NAMES = ("ring1", "ring2", "watch1", "band1")
+
+
+def _parse_accessories(value: str) -> str:
+    """Turn the --accessories value into the argument to pass into Blender.
+
+    Returns:
+        A Python expression building the set of accessories to show.  It is
+        always an explicit set, so a render wears exactly what was asked for
+        rather than whatever the .blend happened to be saved with.
+    """
+    picked = {name.strip() for name in value.split(",") if name.strip()}
+    if picked == {"all"}:
+        picked = set(ACCESSORY_NAMES)
+    elif picked == {"none"}:
+        picked = set()
+    unknown = picked - set(ACCESSORY_NAMES)
+    if unknown:
+        raise click.BadParameter(
+            f"unknown accessory {sorted(unknown)}; choose from {', '.join(ACCESSORY_NAMES)}, all, none"
+        )
+    # sorted() so the expression is stable between runs.
+    return f"set({sorted(picked)!r})"
+
+
+def _build_lanes(hand: int | None, head: bool) -> tuple[tuple[tuple[str, ...], ...], int, int]:
+    """Work out the timelines to sample, and how many events each one gets.
+
+    Two ways of asking exist because they answer different questions.  The
+    default is one shared timeline: "give me N poses", each of which happens to
+    be a left hand, a right hand or a whole-body pose.  --hand instead gives each
+    hand a timeline of its own, so both move on their own schedule and N means N
+    poses *each*.
+
+    Returns:
+        (lanes, events per lane, total events).
+    """
+    if hand is not None:
+        lanes: tuple[tuple[str, ...], ...] = (("left",), ("right",))
+    else:
+        # Whole-body poses share the hands' timeline rather than getting their
+        # own: each keys both hands, so it is simply another thing that can
+        # happen next, not something held alongside them.
+        lanes = (("left", "right", "body"),)
+    if head:
+        lanes = (*lanes, ("head",))
+    return lanes, (hand if hand is not None else 0), len(lanes)
+
+
+SWEEP_DIRECTIONS = ("left", "right", "up", "down")
+
+
+def _parse_camera(value: str | None) -> str:
+    """Turn the --camera value "DIRECTION,DEGREES" into the argument to pass in.
+
+    Returns:
+        A Python expression: "None" for a camera that only follows the head, or
+        a CameraSweep constructor call.
+    """
+    if value is None:
+        return "None"
+    try:
+        direction, degrees_s = value.split(",", 1)
+        degrees = float(degrees_s)
+    except ValueError:
+        raise click.BadParameter(f"expected DIRECTION,DEGREES, got {value!r}") from None
+    direction = direction.strip().lower()
+    if direction not in SWEEP_DIRECTIONS:
+        raise click.BadParameter(f"direction must be one of {', '.join(SWEEP_DIRECTIONS)}, got {direction!r}")
+    return f"CameraSweep({direction!r}, {degrees!r})"
 
 
 def _find_blender(blender_bin: str | None) -> str:
@@ -159,20 +234,15 @@ def _run_blender(expr: str, blender_bin: str | None) -> int:
     return result.returncode
 
 
+# Only the two kinds that exist as files of their own.  camera.json and
+# body_rig.json are $ref'd from body_sequence.json, so validating a sequence
+# already checks the rig and every camera in it.
 VALIDATE_KINDS = (
-    "camera",
-    "body_rig",
     "body_sequence",
     "pose_motion",
 )
 
-GENERATE_KINDS = ("body_sequence",)
-
-PREVIEW_KINDS = ("body_sequence",)
-
 _VALIDATE_FNS = {
-    "camera": val.validate_camera,
-    "body_rig": val.validate_body_rig,
     "body_sequence": val.validate_body_sequence,
     "pose_motion": val.validate_pose_motion,
 }
@@ -200,16 +270,21 @@ def validate(kind: str, input_path: Path) -> None:
 
 
 @cli.command()
-@click.argument("kind", type=click.Choice(GENERATE_KINDS, case_sensitive=False))
 @click.argument("input_path", type=click.Path(path_type=Path))
-@click.option("--output", "output_path", type=click.Path(path_type=Path), required=True)
+@click.option(
+    "--output",
+    "output_path",
+    type=click.Path(path_type=Path),
+    required=True,
+    help="Directory the rendered frames and annotation CSVs are written to.",
+)
 @click.option(
     "--blender",
     "blender_bin",
     default=None,
     envvar="BLENDER_BIN",
     show_envvar=True,
-    help="Path to the Blender executable. Auto-detected as 'blender5' or 'blender' if not set.",
+    help="Path to the Blender executable. Auto-detected if not set.",
 )
 @click.option(
     "--frames",
@@ -217,6 +292,35 @@ def validate(kind: str, input_path: Path) -> None:
     type=int,
     help="How many frames to render, spread evenly across the whole motion. "
     "2 gives the first and last frame. Overrides the sequence's own 'frames'.",
+)
+@click.option(
+    "--accessories",
+    default="none",
+    show_default=True,
+    metavar="LIST",
+    help="Which accessories the model wears: a comma-separated list of "
+    "ring1 (right middle finger), ring2 (left ring finger), watch1 (left wrist), "
+    "band1 (right wrist). Also accepts 'all'.",
+)
+@click.option(
+    "--rotate",
+    type=click.Choice(["0", "90", "180", "270"]),
+    default="0",
+    show_default=True,
+    help="Turn the camera about its own optical axis, in degrees. 90 mounts the "
+    "sensor on its side: the file is still 640x480, but the scene inside it is "
+    "portrait, as on a headset with a rotated camera. The view itself does not "
+    "change, only its orientation in the frame.",
+)
+@click.option(
+    "--camera",
+    "camera_sweep",
+    default=None,
+    metavar="DIRECTION,DEGREES",
+    help="Turn the camera steadily as the clip runs, on top of whatever the head "
+    "is doing: e.g. --camera right,30 starts at the rest view and ends 30 degrees "
+    "to the right. Directions are left, right, up, down. "
+    "Omit for a camera that only moves when the head does.",
 )
 @click.option(
     "--debug_kps",
@@ -229,14 +333,16 @@ def validate(kind: str, input_path: Path) -> None:
     ),
 )
 def generate(
-    kind: str,
     input_path: Path,
     output_path: Path,
     blender_bin: str | None,
     frames: int | None,
+    accessories: str,
+    rotate: str,
+    camera_sweep: str | None,
     debug_kps: bool,
 ) -> None:
-    """Render a sequence or project by driving Blender headlessly.
+    """Render a body sequence to PNG frames and joint annotations.
 
     Requires Blender to be installed. Set BLENDER_BIN or pass --blender to
     specify the executable if 'blender' is not on PATH.
@@ -250,10 +356,13 @@ def generate(
         # Ground-truth 3D joint poses are only worth the extra file when the
         # debug pass is asked for; the data itself is already in hand.
         extra += ", write_3d=True"
+    extra += f", accessories={_parse_accessories(accessories)}, camera_sweep={_parse_camera(camera_sweep)}"
+    extra += f", rotate={float(rotate)!r}"
     expr = (
         _sys_path_setup()
         + "from pathlib import Path; "
         + f"from phanesim.rig import {cls_name}; "
+        + "from phanesim.types import CameraSweep; "
         + f"from phanesim.render import {fn_name}; "
         + f"{fn_name}({cls_name}.from_path(Path({input_abs!r})), Path({output_abs!r}){extra})"
     )
@@ -291,18 +400,37 @@ def generate(
 @click.option(
     "--events",
     "event_count",
-    default=DEFAULT_EVENT_COUNT,
-    show_default=True,
-    help="Exact number of poses per animation, including the one at t=0.",
+    default=None,
+    type=int,
+    help=f"How many poses the clip contains, including the one at t=0. Each is drawn "
+    f"from the left-hand, right-hand and whole-body poses together, so one timeline "
+    f"covers them all.  [default: {DEFAULT_EVENT_COUNT}]",
+)
+@click.option(
+    "--hand",
+    default=None,
+    type=int,
+    help="Give each hand its own timeline of this many poses, so the two move on "
+    "separate schedules and both are always posed. --hand 4 means 4 poses for the "
+    "left hand and 4 for the right. Cannot be used together with --events.",
+)
+@click.option(
+    "--head",
+    is_flag=True,
+    default=False,
+    help="Also move the head, on a timeline of its own, so it turns while the hands "
+    "are changing pose. The camera is anchored to the head, so this moves the camera "
+    "and changes the background too.",
 )
 @click.option("--rest-asset", default=None, help="Pose to key at t=0. Defaults to a random one.")
 @click.option(
     "--seed",
-    default=DEFAULT_SEED,
-    show_default=True,
+    default=None,
     type=int,
-    help="Seed for the first animation; later ones increment from it. "
-    "Generation is reproducible by default; pass a different seed for a different timeline.",
+    help="Seed for the first animation; later ones count up from it. Omit it and a "
+    "fresh seed is drawn, so running the same command again gives different motion. "
+    "Every animation records the seed it was made with, so pass that value back to "
+    "reproduce it exactly.",
 )
 @click.option("--prefix", default="animation", show_default=True, help="Basename of the generated files.")
 @click.option(
@@ -318,21 +446,36 @@ def generate_motion(
     output_dir: Path,
     count: int,
     duration: float,
-    event_count: int,
+    event_count: int | None,
+    hand: int | None,
+    head: bool,
     rest_asset: str | None,
-    seed: int,
+    seed: int | None,
     prefix: str,
     blender_bin: str | None,
 ) -> None:
     """Generate random pose motion descriptions from a model's pose assets.
 
-    You say how many poses and over how long — four poses in one second, ten in
-    twenty seconds — and only which poses and when they land are random.  Writes
-    animation01.json, animation02.json, ... ; the descriptions hold no bone data,
-    so the poses stay in the .blend until `phanesim generate body_sequence` runs.
+    You say how many poses and over how long. Only which poses and when they land
+    are random.
 
-    Blender is launched once to enumerate the pose assets, then all the
-    timelines are sampled in-process.
+    \b
+      --events 4 --duration 1   4 poses in 1 second, each of them a left-hand,
+                                right-hand or whole-body pose
+      --hand 4   --duration 1   4 poses for the left hand and 4 for the right,
+                                on separate timelines, in 1 second
+      --head                    add head movement on a timeline of its own
+
+    A pose only ever keys its own bones, so poses for different parts of the body
+    are held at the same time rather than replacing one another. That is why a
+    library of 9 left and 13 right poses covers 117 configurations, not 22.
+
+    Writes animation01.json, animation02.json, ... ; the descriptions hold no bone
+    data, so the poses stay in the .blend until `phanesim generate body_sequence`
+    runs.
+
+    Blender is launched once to enumerate the pose assets, then all the timelines
+    are sampled in-process.
     """
     with tempfile.TemporaryDirectory() as tmp:
         assets_json = Path(tmp) / "pose_assets.json"
@@ -354,9 +497,39 @@ def generate_motion(
         click.echo(f"Error: no asset-marked actions found in {model_path}.", err=True)
         sys.exit(1)
 
-    poses = [a for a in assets if not a.is_action]
-    actions = [a for a in assets if a.is_action]
-    click.echo(f"[phanesim] Found {len(poses)} pose(s) and {len(actions)} animation(s).")
+    if event_count is not None and hand is not None:
+        raise click.BadParameter("--events and --hand ask for different things; pass one or the other")
+    lanes, _, _ = _build_lanes(hand, head)
+    per_lane = hand if hand is not None else (event_count if event_count is not None else DEFAULT_EVENT_COUNT)
+
+    counts = {g: sum(1 for a in assets if a.group == g) for g in ("left", "right", "head", "body")}
+    # A lane with no assets is skipped by the sampler, so it is not reported as a
+    # timeline either -- model2 has no head poses, and --head there is a no-op.
+    stocked = [lane for lane in lanes if any(counts[g] for g in lane)]
+    for lane in stocked:
+        drawn_from = "+".join(g for g in lane if counts[g])
+        click.echo(f"    timeline: {drawn_from:<18} {sum(counts[g] for g in lane):>3} pose(s)")
+    empty = [lane for lane in lanes if lane not in stocked]
+    for lane in empty:
+        click.echo(f"    no {'+'.join(lane)} poses in this model, so none are animated")
+    used = {g for lane in stocked for g in lane}
+    idle = sorted(g for g, n in counts.items() if n and g not in used)
+    if idle:
+        click.echo(f"    not animated: {', '.join(f'{g} ({counts[g]})' for g in idle)}")
+
+    # Poses only ever key their own bones, so a left and a right pose are held at
+    # the same time whichever timeline drew them.  That is what makes the library
+    # multiply out instead of merely adding up.
+    combinations = 1
+    for group in ("left", "right", "head"):
+        if group in used and counts[group]:
+            combinations *= counts[group]
+    click.echo(f"[phanesim] {combinations} distinct pose combinations available.")
+
+    # Drawn once per run rather than per file, so the whole run is reproducible
+    # from the single number printed below.
+    base_seed = seed if seed is not None else random.randrange(2**31)
+    click.echo(f"[phanesim] Seed {base_seed} -- pass --seed {base_seed} to reproduce this run.")
 
     output_dir.mkdir(parents=True, exist_ok=True)
     for i in range(count):
@@ -365,10 +538,11 @@ def generate_motion(
             assets,
             duration_ns=int(duration * NS_PER_SECOND),
             name=name,
-            event_count=event_count,
-            seed=seed + i,
+            event_count=per_lane,
+            seed=base_seed + i,
             model=str(model_path),
             rest_asset=rest_asset,
+            lanes=lanes,
         )
         out_path = output_dir / f"{name}.json"
         motion.write(out_path)
@@ -380,7 +554,6 @@ def generate_motion(
 
 
 @cli.command()
-@click.argument("kind", type=click.Choice(PREVIEW_KINDS, case_sensitive=False))
 @click.argument("input_path", type=click.Path(path_type=Path))
 @click.option(
     "--output",
@@ -398,14 +571,51 @@ def generate_motion(
     "2 gives the first and last frame. Overrides the sequence's own 'frames'.",
 )
 @click.option(
+    "--accessories",
+    default="none",
+    show_default=True,
+    metavar="LIST",
+    help="Which accessories the model wears: a comma-separated list of "
+    "ring1 (right middle finger), ring2 (left ring finger), watch1 (left wrist), "
+    "band1 (right wrist). Also accepts 'all'.",
+)
+@click.option(
+    "--rotate",
+    type=click.Choice(["0", "90", "180", "270"]),
+    default="0",
+    show_default=True,
+    help="Turn the camera about its own optical axis, in degrees. 90 mounts the "
+    "sensor on its side: the file is still 640x480, but the scene inside it is "
+    "portrait, as on a headset with a rotated camera. The view itself does not "
+    "change, only its orientation in the frame.",
+)
+@click.option(
+    "--camera",
+    "camera_sweep",
+    default=None,
+    metavar="DIRECTION,DEGREES",
+    help="Turn the camera steadily as the clip runs, on top of whatever the head "
+    "is doing: e.g. --camera right,30 starts at the rest view and ends 30 degrees "
+    "to the right. Directions are left, right, up, down. "
+    "Omit for a camera that only moves when the head does.",
+)
+@click.option(
     "--blender",
     "blender_bin",
     default=None,
     envvar="BLENDER_BIN",
     show_envvar=True,
-    help="Path to the Blender executable (default: 'blender' on PATH).",
+    help="Path to the Blender executable. Auto-detected if not set.",
 )
-def preview(kind: str, input_path: Path, output_blend: Path, frames: int | None, blender_bin: str | None) -> None:
+def preview(
+    input_path: Path,
+    output_blend: Path,
+    frames: int | None,
+    accessories: str,
+    rotate: str,
+    camera_sweep: str | None,
+    blender_bin: str | None,
+) -> None:
     """Bake a sequence as keyframes and save the result as a .blend file.
 
     Runs Blender headlessly to bake the animation, then prints the path to the
@@ -418,10 +628,13 @@ def preview(kind: str, input_path: Path, output_blend: Path, frames: int | None,
 
     cls_name, fn_name = "BodySequence", "preview_body_sequence"
     pv_extra = f", frames={frames!r}" if frames is not None else ""
+    pv_extra += f", accessories={_parse_accessories(accessories)}, camera_sweep={_parse_camera(camera_sweep)}"
+    pv_extra += f", rotate={float(rotate)!r}"
     expr = (
         _sys_path_setup()
         + "from pathlib import Path; "
         + f"from phanesim.rig import {cls_name}; "
+        + "from phanesim.types import CameraSweep; "
         + f"from phanesim.render import {fn_name}; "
         + f"{fn_name}({cls_name}.from_path(Path({input_abs!r})), {blend_out!r}{pv_extra})"
     )

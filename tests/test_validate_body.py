@@ -42,8 +42,8 @@ _POSE_MOTION = {
     "name": "animation01",
     "duration_ns": 8_000_000_000,
     "events": [
-        {"t_ns": 0, "asset": "Left_default", "kind": "pose"},
-        {"t_ns": 1_500_000_000, "asset": "hand_wave", "kind": "pose"},
+        {"t_ns": 0, "asset": "Left_default"},
+        {"t_ns": 1_500_000_000, "asset": "hand_wave"},
     ],
 }
 
@@ -134,37 +134,26 @@ class TestPoseMotion:
         with pytest.raises(jsonschema.ValidationError):
             validate_pose_motion(_write(tmp_path, "a.json", data))
 
-    def test_unknown_kind_rejected(self, tmp_path):
-        data = {**_POSE_MOTION, "events": [{"t_ns": 0, "asset": "x", "kind": "gesture"}]}
-        with pytest.raises(jsonschema.ValidationError):
-            validate_pose_motion(_write(tmp_path, "a.json", data))
+    def test_kind_field_rejected(self, tmp_path):
+        # Multi-frame playback is gone, so "kind" no longer means anything. A
+        # timeline still carrying it is from the old format and should fail
+        # loudly rather than be read with the field quietly ignored.
+        for dead in ("kind", "duration_ns", "source_frames"):
+            data = {**_POSE_MOTION, "events": [{"t_ns": 0, "asset": "x", dead: 1}]}
+            with pytest.raises(jsonschema.ValidationError):
+                validate_pose_motion(_write(tmp_path, "a.json", data))
 
     def test_negative_duration_rejected(self, tmp_path):
         data = {**_POSE_MOTION, "duration_ns": -1}
         with pytest.raises(jsonschema.ValidationError):
             validate_pose_motion(_write(tmp_path, "a.json", data))
 
-    def test_action_event_accepts_source_frames(self, tmp_path):
-        data = {
-            **_POSE_MOTION,
-            "events": [
-                {
-                    "t_ns": 0,
-                    "asset": "Wave_Animation",
-                    "kind": "action",
-                    "duration_ns": 1_666_666_666,
-                    "source_frames": [1, 41],
-                }
-            ],
-        }
-        validate_pose_motion(_write(tmp_path, "a.json", data))
-
     def test_generated_file_validates(self, tmp_path):
         # The generator and the schema must agree; this is the contract between
-        # `generate-motion` and `generate body_sequence`.
+        # `generate-motion` and `generate`.
         from phanesim.posemotion import NS_PER_SECOND, PoseAsset, sample_pose_motion
 
-        assets = [PoseAsset(f"P{i}", 1, 1) for i in range(4)] + [PoseAsset("Wave", 1, 41, 24)]
+        assets = [PoseAsset(f"P{i}", 1, group="right") for i in range(4)] + [PoseAsset("L0", 1, group="left")]
         motion = sample_pose_motion(assets, 30 * NS_PER_SECOND, seed=3)
         path = tmp_path / "generated.json"
         motion.write(path)

@@ -4,21 +4,32 @@
   "title": "BodyRig",
   "description": "Head-mounted cameras attached to one full-body model. There is no T_c_h: body joints are already in world space and each camera pose is derived from the head bone every frame.",
   "type": "object",
-  "required": ["cameras", "body"],
+  "required": [
+    "cameras",
+    "body"
+  ],
   "additionalProperties": false,
   "properties": {
     "cameras": {
       "type": "array",
       "minItems": 1,
-      "items": {"$ref": "camera.json"}
+      "items": {
+        "$ref": "camera.json"
+      }
     },
-    "body": {"$ref": "#/$defs/body"},
-    "head_camera": {"$ref": "#/$defs/head_camera"}
+    "body": {
+      "$ref": "#/$defs/body"
+    },
+    "head_camera": {
+      "$ref": "#/$defs/head_camera"
+    }
   },
   "$defs": {
     "body": {
       "type": "object",
-      "required": ["model"],
+      "required": [
+        "model"
+      ],
       "additionalProperties": false,
       "properties": {
         "model": {
@@ -29,11 +40,18 @@
           "type": "string",
           "description": "Name of the armature object inside the .blend. Defaults to 'rig'."
         },
-        "name": {"type": "string"},
+        "name": {
+          "type": "string"
+        },
         "hands": {
           "type": "array",
           "description": "Hand sides exported to joints_2d.csv, in column order.",
-          "items": {"enum": ["left", "right"]},
+          "items": {
+            "enum": [
+              "left",
+              "right"
+            ]
+          },
           "minItems": 1,
           "maxItems": 2,
           "uniqueItems": true
@@ -52,14 +70,18 @@
         "rest_position": {
           "type": "array",
           "description": "World-space camera position while the body is in its rest pose. Must lie outside the head mesh, in front of the nose tip.",
-          "items": {"type": "number"},
+          "items": {
+            "type": "number"
+          },
           "minItems": 3,
           "maxItems": 3
         },
         "rest_forward": {
           "type": "array",
           "description": "World-space direction the camera looks while the body is in its rest pose. The body faces -Y, and hands sit below eye level, so this is normally tilted down: [0, -1, -0.268] is 15 degrees below horizontal. Defaults to that.",
-          "items": {"type": "number"},
+          "items": {
+            "type": "number"
+          },
           "minItems": 3,
           "maxItems": 3
         }

@@ -12,6 +12,21 @@ path = "data/models/**"
 SPDX-FileCopyrightText = ["Manuel Bastioni, MB-Lab contributors", "2026 Yutong Wan"]
 SPDX-License-Identifier = "AGPL-3.0-only"
 
+# model1 additionally embeds three third-party accessory meshes obtained from
+# Sketchfab under CC-BY-4.0, which requires each creator to be credited.  The
+# full attribution notices that must travel with any redistribution are in
+# README.md under "Third-party assets".
+[[annotations]]
+path = "data/models/model1/model1.blend"
+SPDX-FileCopyrightText = [
+    "Manuel Bastioni, MB-Lab contributors",
+    "2026 Yutong Wan",
+    "Lizardsking (https://sketchfab.com/lizardsking) - \"543 - Ring\"",
+    "carloshisserich (https://sketchfab.com/carloshisserich) - \"Seiko Watch\"",
+    "Mikaeel Irani (https://sketchfab.com/mirani55) - \"Braided Loop Wristband\"",
+]
+SPDX-License-Identifier = "AGPL-3.0-only AND CC-BY-4.0"
+
 [[annotations]]
 path = "data/hdri/**"
 SPDX-FileCopyrightText = "Sergej Majboroda"

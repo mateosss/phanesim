@@ -19,8 +19,10 @@ the whole gap between them, so no frame is ever a repeat of the one before it::
     pose A reached      interpolating       pose B reached
          t0 |---------------------------------| t1
 
-For ``kind == "action"`` events the asset is a multi-frame animation: after it is
-reached at ``t_ns`` its source frames are played back over ``duration_ns``.
+Every asset is a single-frame pose.  Multi-frame playback was removed once the
+pose library covered the hand shapes on its own: a played-back clip pinned the
+whole body to one authored motion, which is the opposite of what a frame-diverse
+dataset wants.
 
 This module is bpy-free so it can be imported outside Blender.
 """
@@ -37,9 +39,6 @@ NS_PER_SECOND = 1_000_000_000
 # Sampling defaults, used when the caller asks for neither a count nor a length.
 DEFAULT_EVENT_COUNT = 8
 DEFAULT_DURATION_SECONDS = 20.0
-# Generation is reproducible by default: the same command yields the same
-# timeline unless a different seed is asked for.
-DEFAULT_SEED = 42
 
 
 @dataclass
@@ -47,45 +46,30 @@ class PoseEvent:
     """A single pose asset reached at a point in time.
 
     Attributes:
-        t_ns:         Time at which the asset is fully reached, in nanoseconds.
-        asset:        Name of the pose asset (an action inside the model .blend).
-        kind:         "pose" for single-frame assets, "action" for multi-frame ones.
-        duration_ns:  For "action" events, playback length after t_ns; 0 for poses.
-        source_frames: For "action" events, the asset's own [first, last] frame range.
+        t_ns:  Time at which the asset is fully reached, in nanoseconds.
+        asset: Name of the pose asset (an action inside the model .blend).
+        group: Body region the asset drives ("left", "right", "head", "body").
+               Events in different groups touch disjoint bones and are applied
+               independently, so they layer rather than replace.
     """
 
     t_ns: int
     asset: str
-    kind: str = "pose"
-    duration_ns: int = 0
-    source_frames: tuple[int, int] | None = None
-
-    @property
-    def end_ns(self) -> int:
-        """Time at which this event is finished, including any action playback."""
-        return self.t_ns + self.duration_ns
+    group: str = "body"
 
     def to_dict(self) -> dict:
-        data: dict = {
+        return {
             "t_ns": int(self.t_ns),
             "asset": self.asset,
-            "kind": self.kind,
+            "group": self.group,
         }
-        if self.kind == "action":
-            data["duration_ns"] = int(self.duration_ns)
-            if self.source_frames is not None:
-                data["source_frames"] = [int(self.source_frames[0]), int(self.source_frames[1])]
-        return data
 
     @classmethod
     def from_dict(cls, data: dict) -> PoseEvent:
-        frames = data.get("source_frames")
         return cls(
             t_ns=int(data["t_ns"]),
             asset=str(data["asset"]),
-            kind=str(data.get("kind", "pose")),
-            duration_ns=int(data.get("duration_ns", 0)),
-            source_frames=(int(frames[0]), int(frames[1])) if frames else None,
+            group=str(data.get("group", "body")),
         )
 
 
@@ -121,9 +105,12 @@ class PoseMotion:
 
     @property
     def t_end_ns(self) -> int:
-        """End of the timeline: the later of the declared duration and the last event."""
-        last = max((e.end_ns for e in self.events), default=0)
-        return max(int(self.duration_ns), last)
+        """End of the timeline.
+
+        Every event is instantaneous and the sampler pins the last one to
+        duration_ns, so the declared length is the end.
+        """
+        return int(self.duration_ns)
 
     def assets(self) -> list[str]:
         """Unique asset names referenced by this timeline, in first-use order."""
@@ -168,58 +155,39 @@ class PoseMotion:
 
     def summary(self) -> str:
         """Human-readable one-line-per-event timeline, e.g. for CLI output."""
-        lines = []
-        for e in self.events:
-            t = e.t_ns / NS_PER_SECOND
-            if e.kind == "action":
-                lines.append(f"  {t:6.2f}s  play  {e.asset} ({e.duration_ns / NS_PER_SECOND:.2f}s)")
-            else:
-                lines.append(f"  {t:6.2f}s  pose  {e.asset}")
-        return "\n".join(lines)
+        return "\n".join(f"  {e.t_ns / NS_PER_SECOND:6.2f}s  {e.group:<5} pose  {e.asset}" for e in self.events)
 
 
 @dataclass
 class PoseAsset:
-    """A pose asset discovered inside a model .blend.
+    """A single-frame pose asset discovered inside a model .blend.
 
-    A single-frame asset is a static pose; a multi-frame one is an animation that
-    is played back in full.
+    *frame* is the frame its action holds the pose on, which is what the renderer
+    evaluates the action at to read the bone values out.
+
+    *group* records which part of the body the asset drives, derived from the
+    bones it animates rather than from its name.  Assets in different groups
+    touch disjoint bones and can therefore be combined freely, which is what
+    turns a library of N poses into a much larger space of configurations.
     """
 
     name: str
-    frame_start: int
-    frame_end: int
-    fps: int = 24
-
-    @property
-    def is_action(self) -> bool:
-        return self.frame_end > self.frame_start
-
-    @property
-    def kind(self) -> str:
-        return "action" if self.is_action else "pose"
-
-    @property
-    def duration_ns(self) -> int:
-        if not self.is_action:
-            return 0
-        return int((self.frame_end - self.frame_start) * NS_PER_SECOND / self.fps)
+    frame: int
+    group: str = "body"
 
     def to_dict(self) -> dict:
         return {
             "name": self.name,
-            "frame_start": int(self.frame_start),
-            "frame_end": int(self.frame_end),
-            "fps": int(self.fps),
+            "frame": int(self.frame),
+            "group": self.group,
         }
 
     @classmethod
     def from_dict(cls, data: dict) -> PoseAsset:
         return cls(
             name=str(data["name"]),
-            frame_start=int(data["frame_start"]),
-            frame_end=int(data["frame_end"]),
-            fps=int(data.get("fps", 24)),
+            frame=int(data["frame"]),
+            group=str(data.get("group", "body")),
         )
 
 
@@ -232,6 +200,7 @@ def sample_pose_motion(
     seed: int | None = None,
     model: str | None = None,
     rest_asset: str | None = None,
+    lanes: tuple[tuple[str, ...], ...] = (("left", "right", "body"),),
 ) -> PoseMotion:
     """Place exactly *event_count* poses at random times within *duration_ns*.
 
@@ -252,17 +221,32 @@ def sample_pose_motion(
     There is no minimum spacing: poses may land arbitrarily close together, and
     the armature simply moves faster to reach the next one in time.
 
+    Both rules apply per *lane*.  A lane is one timeline; giving each hand its
+    own lane lets them change at different moments, while a single lane covering
+    both draws one pose at a time and lets whichever hand it belongs to move.
+    Because a pose only ever keys its own bones, poses from different lanes are
+    held simultaneously rather than replacing one another.
+
     Args:
         assets:      Pose assets available to draw from.
         duration_ns: Length of the timeline in nanoseconds.
         name:        Name recorded in the description.
         event_count: Exact number of poses, including the one at t=0.
-        seed:        Seed for reproducibility; None draws a random one.
+        seed:        Seed for reproducibility; None draws a random one.  Either
+                     way the value used is recorded on the returned PoseMotion,
+                     so any timeline can be regenerated exactly.
         model:       Path to the .blend the assets came from, recorded for reference.
-        rest_asset:  Asset to key at t=0; defaults to a random one.
+        rest_asset:  Asset to key at t=0 for the group it belongs to; the other
+                     groups open on a random pose.  Defaults to random throughout.
+        lanes:       Independent timelines to sample, each named by the groups
+                     it draws from.  One lane over ("left", "right", "body") is
+                     a single shared timeline where every event is whichever
+                     pose was drawn; two lanes ("left",) and ("right",) give
+                     each hand its own schedule.  Every lane gets event_count
+                     events, so the total is event_count x len(lanes).
 
     Returns:
-        A PoseMotion with exactly *event_count* events, sorted by time.
+        A PoseMotion whose events are sorted by time.
 
     Raises:
         ValueError: If *assets* is empty, *duration_ns* is not positive, or
@@ -274,52 +258,58 @@ def sample_pose_motion(
         raise ValueError(f"duration_ns must be positive, got {duration_ns}")
     if event_count < 1:
         raise ValueError(f"event_count must be at least 1, got {event_count}")
+    if rest_asset is not None and not any(a.name == rest_asset for a in assets):
+        raise ValueError(f"rest_asset {rest_asset!r} is not among the available assets")
 
     if seed is None:
         seed = random.randrange(2**31)
     rng = random.Random(seed)
 
     def make(t_ns: int, asset: PoseAsset) -> PoseEvent:
-        return PoseEvent(
-            t_ns=t_ns,
-            asset=asset.name,
-            kind=asset.kind,
-            duration_ns=asset.duration_ns,
-            source_frames=(asset.frame_start, asset.frame_end) if asset.is_action else None,
-        )
+        return PoseEvent(t_ns=t_ns, asset=asset.name, group=asset.group)
 
-    # The opening pose is keyed at t=0 with no transition into it.
-    start = next((a for a in assets if a.name == rest_asset), None) if rest_asset else rng.choice(assets)
-    if start is None:
-        raise ValueError(f"rest_asset {rest_asset!r} is not among the available assets")
-    events = [make(0, start)]
+    def sample_lane(pool: list[PoseAsset]) -> list[PoseEvent]:
+        """Draw one independent timeline from *pool*."""
+        # The opening pose is keyed at t=0 so the clip does not start mid-motion.
+        start = next((a for a in pool if a.name == rest_asset), None) if rest_asset else rng.choice(pool)
+        if start is None:
+            start = rng.choice(pool)
+        out = [make(0, start)]
 
-    # Interior times are the order statistics of uniform draws — the arrival times
-    # of the conditioned process.  The final event is pinned to the end of the
-    # timeline instead of being drawn: uniform placement leaves the clip ending
-    # part way through, and whatever pose was last reached then freezes for the
-    # remainder.  Sampled freely, that dead tail averages a quarter of a
-    # four-event clip.
-    times = sorted(rng.randrange(1, max(2, duration_ns)) for _ in range(max(0, event_count - 2)))
-    if event_count > 1:
-        times.append(duration_ns)
+        # Interior times are the order statistics of uniform draws — the arrival
+        # times of the conditioned process.  The final event is pinned to the end
+        # of the timeline instead of being drawn: uniform placement leaves the
+        # clip ending part way through, and whatever pose was last reached then
+        # freezes for the remainder.  Sampled freely, that dead tail averages a
+        # quarter of a four-event clip.
+        times = sorted(rng.randrange(1, max(2, duration_ns)) for _ in range(max(0, event_count - 2)))
+        if event_count > 1:
+            times.append(duration_ns)
 
-    previous = start.name
-    for t_ns in times:
-        # Never draw the pose that is already showing: an event that changes
-        # nothing freezes every frame until the next one.
-        pool = [a for a in assets if a.name != previous] or assets
-        asset = rng.choice(pool)
-        events.append(make(t_ns, asset))
-        previous = asset.name
+        previous = start.name
+        for t_ns in times:
+            # Never draw the pose that is already showing: an event that changes
+            # nothing freezes every frame until the next one.
+            candidates = [a for a in pool if a.name != previous] or pool
+            asset = rng.choice(candidates)
+            out.append(make(t_ns, asset))
+            previous = asset.name
+        return out
 
-    # A multi-frame asset cannot play for longer than the gap it was given, or
-    # its playback would run past the pose that follows it.
-    for i, event in enumerate(events):
-        if event.kind != "action":
-            continue
-        following = events[i + 1].t_ns if i + 1 < len(events) else duration_ns
-        event.duration_ns = min(event.duration_ns, max(0, following - event.t_ns))
+    # Each lane is sampled independently and the timelines are merged.  Where the
+    # lanes drive disjoint bones -- the two hands, or a hand and the head -- a
+    # library of L left and R right poses spans L x R configurations rather than
+    # L + R, because both are held at once.
+    pools = [[a for a in assets if a.group in lane] for lane in lanes]
+    if not any(pools):
+        available = sorted({a.group for a in assets})
+        raise ValueError(f"no assets in lanes {[list(lane) for lane in lanes]}; found groups {available}")
+
+    events: list[PoseEvent] = []
+    for pool in pools:
+        if pool:
+            events.extend(sample_lane(pool))
+    events.sort(key=lambda e: e.t_ns)
 
     return PoseMotion(
         name=name,

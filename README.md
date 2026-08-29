@@ -196,11 +196,11 @@ rendering it takes minutes.
 ### Step 1 — make a motion description
 
 ```bash
-# 4 poses in 1 second
+# 4 random poses in 1 second
 uv run phanesim generate-motion --model data/models/model1/model1.blend \
     --output data/sequences/model1 --events 4 --duration 1
 
-# 10 poses over 20 seconds, as 5 separate files
+# 10 random poses over 20 seconds, as 5 separate files
 uv run phanesim generate-motion --model data/models/model1/model1.blend \
     --output data/sequences/model1 --events 10 --duration 20 --count 5
 ```
@@ -211,33 +211,113 @@ only the timeline — no bone data, because the poses stay in the `.blend`.
 
 ```json
 {
-  "duration_ns": 4000000000,
-  "event_count": 3,
+  "duration_ns": 1000000000,
+  "event_count": 4,
   "events": [
-    {"t_ns": 0,          "asset": "Right_fist",    "kind": "pose"},
-    {"t_ns": 1040000000, "asset": "Right_one.002", "kind": "pose"},
-    {"t_ns": 4000000000, "asset": "Left_three",    "kind": "pose"}
+    {"t_ns": 0,          "asset": "Right_three", "group": "right"},
+    {"t_ns": 30000000,   "asset": "Left_three", "group": "left"},
+    {"t_ns": 120000000,  "asset": "Left_pointing", "group": "left"},
+    {"t_ns": 1000000000, "asset": "Look_At_Hand", "group": "body"}
   ]
 }
 ```
 
-Each event says which pose is reached at `t_ns` nanoseconds. The body moves
-continuously from one pose to the next, so no two frames look the same. Three
-rules keep it that way: the first pose is at `t=0`, the last is at `duration_ns`,
-and the same pose is never used twice in a row.
+Each event says which pose is reached at `t_ns` nanoseconds, and `group` says
+which part of the body it moves. `--events 4` means **4 poses in the clip**: each
+one is drawn from the left-hand, right-hand and whole-body poses together, so the
+draw decides which part of the body moves next.
 
-The same command always gives the same result (`--seed 42` by default). Pass a
-different `--seed` to get a different timeline.
+The body moves continuously from one pose to the next, so no two frames look the
+same. Three rules keep it that way: the first pose is at `t=0`, the last is at
+`duration_ns`, and the same pose is never used twice in a row.
+
+**Each run gives different motion.** A fresh seed is drawn every time, so running
+the same command again builds up a dataset instead of rewriting the same file.
+The seed is printed and stored in the JSON:
+
+```
+[phanesim] Seed 1727056693 -- pass --seed 1727056693 to reproduce this run.
+```
+
+#### Poses combine, they do not replace each other
+
+Every pose asset is sorted into a **group** — `left`, `right`, `head` or `body` —
+by the bones it actually keys. A left-hand pose only touches left-hand bones, so
+applying it leaves the right hand exactly where it was. That is why the timeline
+above still has both hands posed at `0.12s` even though only the left one moved.
+
+It also means a small library goes a long way: `model1`'s 9 left and 13 right
+poses cover 9 x 13 = **117** configurations, not 22. The command prints the count
+when it runs.
+
+Whole-body poses (`Look_At_Hand`, `Pose_photo`) key both hands and the head at
+once, so they are simply another thing the draw can turn up, replacing whatever
+was held.
+
+#### One timeline per hand — `--hand`
+
+`--hand N` gives each hand a timeline of its own, so both are always moving and
+neither waits for the other:
+
+```bash
+uv run phanesim generate-motion --model data/models/model1/model1.blend \
+    --output data/sequences/model1 --hand 4 --duration 1
+```
+
+```
+8 poses over 1 s  (seed=42)
+  0.00s  left  pose  Left_Tel          0.00s  right pose  Right_V
+  0.03s  left  pose  Left_grab         0.11s  right pose  Right_stop
+  0.80s  left  pose  Left_Two          0.79s  right pose  hand_wave
+  1.00s  left  pose  Left_default      1.00s  right pose  Right_rock2
+```
+
+`--hand 4` means 4 poses for the left hand **and** 4 for the right — 8 events in
+the file, but only 4 for each hand to get through in that second. The two columns
+above are the two hands, shown side by side; the command prints one list sorted
+by time.
+
+`--events` and `--hand` answer different questions, so pass one or the other, not
+both. Whole-body poses do not appear under `--hand`: they key both hands, so
+there is no single hand's timeline they belong on.
+
+#### Head movement — `--head`
+
+```bash
+uv run phanesim generate-motion --model data/models/model1/model1.blend \
+    --output data/sequences/model1 --hand 4 --duration 1 --head
+```
+
+`--head` adds the head on a timeline of its own, so it turns while the hands are
+changing pose — the two are independent and can change at the same moment. The
+camera is anchored to the head bone, so this moves the camera and changes the
+background too. Without the flag the head stays still.
+
+It works with either `--events` or `--hand`, and adds that many head poses on top.
 
 ### Step 2 — render
 
 ```bash
-uv run phanesim generate body_sequence data/sequences/model1/sequence.json \
+# bare hands, camera fixed to the head
+uv run phanesim generate data/sequences/model1/sequence.json \
     --frames 81 --output output_folder
 
 # add the keypoint overlay to check the ground truth visually
-uv run phanesim generate body_sequence data/sequences/model1/sequence.json \
+uv run phanesim generate data/sequences/model1/sequence.json \
     --frames 81 --output output_folder --debug_kps
+
+# wear a watch and a ring
+uv run phanesim generate data/sequences/model1/sequence.json \
+    --frames 81 --output output_folder --accessories watch1,ring1
+
+# pan the camera 30 degrees to the right over the clip
+uv run phanesim generate data/sequences/model1/sequence.json \
+    --frames 81 --output output_folder --camera right,30
+
+# everything at once: all four accessories, a leftward pan, sensor on its side
+uv run phanesim generate data/sequences/model1/sequence.json \
+    --frames 81 --output output_folder \
+    --accessories all --camera left,25 --rotate 90
 ```
 
 This writes to `output_folder/cam_<name>/`:
@@ -254,10 +334,72 @@ This writes to `output_folder/cam_<name>/`:
 entire animation. Use a small number to check something quickly and a large one
 for the real dataset. Rendering takes roughly 5 seconds per frame.
 
+#### Accessories
+
+`--accessories` picks what the model wears. **Nothing is worn by default**, so a
+frame shows exactly what you asked for. `model1` has four to choose from:
+
+| Name | What it is | Where |
+|---|---|---|
+| `ring1` | ring | right middle finger |
+| `ring2` | wedding ring | left ring finger |
+| `watch1` | wristwatch | left wrist |
+| `band1` | braided wristband | right wrist |
+
+```bash
+--accessories all              # wear everything
+--accessories watch1,ring1     # just these two
+--accessories none             # bare hands (the default)
+```
+
+Render the same motion twice with different accessories to get two variations of
+the same frames. `model2` has none of them, so it prints a note and renders bare.
+
+#### Camera movement
+
+Two things move the camera, and they add up:
+
+- **The head**, if the motion was made with `--head`. This is real head movement,
+  so the background changes as a person's would.
+- **`--camera DIRECTION,DEGREES`**, a steady turn on top of that. The clip
+  starts at the rest view and ends `DEGREES` away from it, so `right,30` pans
+  the camera 30 degrees to the right across the frames and the background slides
+  left.
+
+```bash
+--camera right,30    # pan right, ending 30 degrees off
+--camera left,20     # pan left
+--camera up,15       # tilt up
+--camera down,25     # tilt down
+```
+
+Directions are `left`, `right`, `up`, `down`. Leave the option out and the
+camera only moves when the head does. It works on `preview` too, so you can
+scrub the turn in Blender before rendering anything.
+
+#### Camera rotation — `--rotate`
+
+`--rotate 90` turns the camera about its own optical axis, so the sensor sits on
+its side:
+
+```bash
+uv run phanesim generate data/sequences/model1/sequence.json \
+    --frames 81 --output output_folder --rotate 90
+```
+
+The file is still 640x480 and the camera still looks in the same direction — only
+the orientation of the scene inside the frame changes, so a 480x640 portrait view
+fills a landscape image. This is what a headset with a rotated camera sees, and it
+is a cheap way to double a dataset: render the same motion twice, once at `0` and
+once at `90`.
+
+`0`, `90`, `180` and `270` are accepted. The keypoints in `joints_2d.csv` rotate
+with the image, so the annotations stay correct.
+
 ### Preview — look at it in Blender
 
 ```bash
-uv run phanesim preview body_sequence data/sequences/model1/sequence.json \
+uv run phanesim preview data/sequences/model1/sequence.json \
     --frames 15 --output preview.blend
 ```
 
@@ -265,7 +407,7 @@ uv run phanesim preview body_sequence data/sequences/model1/sequence.json \
 a `.blend` file and stops. Open that file in Blender to scrub the timeline, check
 where the camera is pointing, and adjust the compositor nodes by hand. It takes
 seconds instead of minutes, so use it to check a setup before committing to a
-full render with `generate`.
+full render with `generate`. It accepts `--accessories` and `--camera` as well.
 
 ### The sequence file — you edit this one by hand
 
@@ -355,9 +497,45 @@ uv run phanesim validate body_sequence data/sequences/model1/sequence.json
 
 ```bash
 uv run phanesim validate body_sequence data/sequences/model1/sequence.json
-uv run phanesim validate pose_motion data/sequences/model1/animation01.json
-uv run phanesim validate camera        camera.json
+uv run phanesim validate pose_motion   data/sequences/model1/animation01.json
 ```
 
 Prints `OK` or the reason the file is wrong. Useful after editing a
 `sequence.json` by hand.
+
+## Third-party assets
+
+These credits must be reproduced wherever the models or rendered datasets are
+shared. They are also recorded in `REUSE.toml`.
+
+### Accessory meshes embedded in `data/models/model1/model1.blend`
+
+All three are licensed **CC-BY-4.0** (http://creativecommons.org/licenses/by/4.0/),
+which requires the author to be credited. Commercial use is allowed.
+
+> This work is based on "543 - Ring"
+> (https://sketchfab.com/3d-models/543-ring-4c55eacf1f264799b5a61126678f8360)
+> by Lizardsking (https://sketchfab.com/lizardsking)
+> licensed under CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
+
+> This work is based on "Seiko Watch"
+> (https://sketchfab.com/3d-models/seiko-watch-0796e23ab5c0448c9bdf3fe5c3b3e362)
+> by carloshisserich (https://sketchfab.com/carloshisserich)
+> licensed under CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
+
+> This work is based on "Braided Loop Wristband"
+> (https://sketchfab.com/3d-models/braided-loop-wristband-d889ebab38da43fda673eb273945afdc)
+> by Mikaeel Irani (https://sketchfab.com/mirani55)
+> licensed under CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
+
+### Body meshes
+
+`model1` and `model2` are derived from MB-Lab base meshes
+(Manuel Bastioni, MB-Lab contributors), rigged and posed for this project, and
+carry **AGPL-3.0-only**. `model1.blend` is therefore a combined work under
+`AGPL-3.0-only AND CC-BY-4.0`.
+
+### Environment map
+
+`data/hdri/brown_photostudio_02_2k.exr` by Sergej Majboroda, **CC0-1.0**
+(no attribution required, credited here as a courtesy).

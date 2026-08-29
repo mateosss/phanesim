@@ -4,16 +4,36 @@
   "title": "PoseMotion",
   "description": "A motion description: which pose asset is reached at which time. Bone values are not stored here; they are resolved from the pose assets inside the model .blend at render time.",
   "type": "object",
-  "required": ["name", "duration_ns", "events"],
+  "required": [
+    "name",
+    "duration_ns",
+    "events"
+  ],
   "additionalProperties": false,
   "properties": {
-    "name": {"type": "string"},
+    "name": {
+      "type": "string"
+    },
     "model": {
-      "oneOf": [{"type": "null"}, {"type": "string"}],
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "string"
+        }
+      ],
       "description": "Path to the .blend the pose assets were enumerated from, recorded for reference."
     },
     "seed": {
-      "oneOf": [{"type": "null"}, {"type": "integer"}],
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "integer"
+        }
+      ],
       "description": "Seed of the random draw; re-running with this seed reproduces the timeline."
     },
     "duration_ns": {
@@ -29,13 +49,18 @@
     "events": {
       "type": "array",
       "minItems": 1,
-      "items": {"$ref": "#/$defs/pose_event"}
+      "items": {
+        "$ref": "#/$defs/pose_event"
+      }
     }
   },
   "$defs": {
     "pose_event": {
       "type": "object",
-      "required": ["t_ns", "asset"],
+      "required": [
+        "t_ns",
+        "asset"
+      ],
       "additionalProperties": false,
       "properties": {
         "t_ns": {
@@ -47,26 +72,12 @@
           "type": "string",
           "description": "Name of the pose asset (an action inside the model .blend)."
         },
-        "kind": {
-          "enum": ["pose", "action"],
-          "description": "'pose' for single-frame assets, 'action' for multi-frame ones."
-        },
-        "duration_ns": {
-          "type": "integer",
-          "minimum": 0,
-          "description": "For 'action' events, playback length after t_ns."
-        },
-        "source_frames": {
-          "type": "array",
-          "description": "For 'action' events, the asset's own [first, last] frame range.",
-          "prefixItems": [
-            {"type": "integer", "title": "first"},
-            {"type": "integer", "title": "last"}
-          ],
-          "minItems": 2,
-          "maxItems": 2
+        "group": {
+          "type": "string",
+          "description": "Body region the asset drives (left, right, head, body). Events in different groups touch disjoint bones and are layered rather than replacing one another."
         }
-      }
+      },
+      "description": "One pose reached at one instant. Every asset is a single-frame pose."
     }
   }
 }

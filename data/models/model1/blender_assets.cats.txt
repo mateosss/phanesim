@@ -11,3 +11,4 @@ VERSION 1
 
 497c9825-4456-4d6f-92fc-e4c7705eb04d:Pose:Pose
 ea67a799-6a35-4703-b291-bf017b726ee1:Pose/hand:Pose-hand
+736c9f4a-8b76-439e-b644-1b68395a0531:Pose/Head:Pose-Head
