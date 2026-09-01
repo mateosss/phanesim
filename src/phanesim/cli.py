@@ -18,6 +18,14 @@ import jsonschema
 from PIL import Image, ImageDraw
 
 import phanesim.validate as val
+from phanesim.clips import (
+    ANIMATION_FILE,
+    SEQUENCE_FILE,
+    choose_accessories,
+    clip_dirs,
+    next_clip_index,
+    randomize_camera,
+)
 from phanesim.posemotion import (
     DEFAULT_DURATION_SECONDS,
     DEFAULT_EVENT_COUNT,
@@ -38,14 +46,15 @@ _PKG_PARENT = str(Path(__file__).parent.parent)
 ACCESSORY_NAMES = ("ring1", "ring2", "watch1", "band1")
 
 
-def _parse_accessories(value: str) -> str:
+def _parse_accessories(value: str | None) -> str:
     """Turn the --accessories value into the argument to pass into Blender.
 
     Returns:
-        A Python expression building the set of accessories to show.  It is
-        always an explicit set, so a render wears exactly what was asked for
-        rather than whatever the .blend happened to be saved with.
+        A Python expression: "None" to let the sequence file decide, otherwise an
+        explicit set.  Never the .blend's saved state, which has all four showing.
     """
+    if value is None:
+        return "None"
     picked = {name.strip() for name in value.split(",") if name.strip()}
     if picked == {"all"}:
         picked = set(ACCESSORY_NAMES)
@@ -105,6 +114,17 @@ def _parse_camera(value: str | None) -> str:
     if direction not in SWEEP_DIRECTIONS:
         raise click.BadParameter(f"direction must be one of {', '.join(SWEEP_DIRECTIONS)}, got {direction!r}")
     return f"CameraSweep({direction!r}, {degrees!r})"
+
+
+def _shortest_path(target: Path, start: Path) -> str:
+    """Path from *start* to *target*, whichever of relative or absolute is shorter.
+
+    Relative keeps a dataset movable as a whole, but one sitting on another
+    filesystem produces a wall of "../" that nobody can read.  Falling back to
+    absolute there keeps the file legible; both forms load the same.
+    """
+    relative = os.path.relpath(target, start)
+    return relative if len(relative) <= len(str(target)) else str(target)
 
 
 def _find_blender(blender_bin: str | None) -> str:
@@ -295,12 +315,12 @@ def validate(kind: str, input_path: Path) -> None:
 )
 @click.option(
     "--accessories",
-    default="none",
-    show_default=True,
+    default=None,
     metavar="LIST",
-    help="Which accessories the model wears: a comma-separated list of "
-    "ring1 (right middle finger), ring2 (left ring finger), watch1 (left wrist), "
-    "band1 (right wrist). Also accepts 'all'.",
+    help="Override what the model wears: a comma-separated list of ring1 (right "
+    "middle finger), ring2 (left ring finger), watch1 (left wrist), band1 (right "
+    "wrist). Also accepts 'all' and 'none'. Omit to use the sequence file's own "
+    "list, which is empty unless it says otherwise.",
 )
 @click.option(
     "--rotate",
@@ -337,7 +357,7 @@ def generate(
     output_path: Path,
     blender_bin: str | None,
     frames: int | None,
-    accessories: str,
+    accessories: str | None,
     rotate: str,
     camera_sweep: str | None,
     debug_kps: bool,
@@ -572,12 +592,12 @@ def generate_motion(
 )
 @click.option(
     "--accessories",
-    default="none",
-    show_default=True,
+    default=None,
     metavar="LIST",
-    help="Which accessories the model wears: a comma-separated list of "
-    "ring1 (right middle finger), ring2 (left ring finger), watch1 (left wrist), "
-    "band1 (right wrist). Also accepts 'all'.",
+    help="Override what the model wears: a comma-separated list of ring1 (right "
+    "middle finger), ring2 (left ring finger), watch1 (left wrist), band1 (right "
+    "wrist). Also accepts 'all' and 'none'. Omit to use the sequence file's own "
+    "list, which is empty unless it says otherwise.",
 )
 @click.option(
     "--rotate",
@@ -611,7 +631,7 @@ def preview(
     input_path: Path,
     output_blend: Path,
     frames: int | None,
-    accessories: str,
+    accessories: str | None,
     rotate: str,
     camera_sweep: str | None,
     blender_bin: str | None,
@@ -644,6 +664,220 @@ def preview(
         sys.exit(code)
 
     click.echo(f"Preview saved: {blend_out}")
+
+
+@cli.command(name="plan-clips")
+@click.option(
+    "--template",
+    "templates",
+    multiple=True,
+    required=True,
+    type=click.Path(path_type=Path, exists=True),
+    help="A sequence.json to use as a starting point. Repeat it to mix bodies: "
+    "each clip picks one at random, then gets its own background and camera.",
+)
+@click.option(
+    "--output",
+    "output_dir",
+    type=click.Path(path_type=Path),
+    required=True,
+    help="Directory the clip_NNNNN/ subdirectories are written to.",
+)
+@click.option("--clips", "clip_count", default=100, show_default=True, help="How many clips to plan.")
+@click.option("--frames", default=50, show_default=True, help="Frames rendered per clip.")
+@click.option(
+    "--hand",
+    default=8,
+    show_default=True,
+    help="Poses per hand in each clip. Roughly frames/7 keeps consecutive frames "
+    "about 25 px apart; far below that they start to look alike.",
+)
+@click.option("--head/--no-head", default=True, show_default=True, help="Also move the head.")
+@click.option(
+    "--append",
+    is_flag=True,
+    default=False,
+    help="Add to a dataset that already has clips, numbering on from the last one. "
+    "Use this to plan each body separately and control the mix yourself.",
+)
+@click.option(
+    "--overwrite",
+    is_flag=True,
+    default=False,
+    help="Re-plan from clip_00000, replacing what is there. Any frames already "
+    "rendered stop matching their settings and will be rendered again.",
+)
+@click.option(
+    "--seed",
+    default=None,
+    type=int,
+    help="Seed for the whole plan. Omit for a fresh one; it is recorded in every clip.",
+)
+@click.option(
+    "--blender",
+    "blender_bin",
+    default=None,
+    envvar="BLENDER_BIN",
+    show_envvar=True,
+    help="Path to the Blender executable. Auto-detected if not set.",
+)
+def plan_clips(
+    templates: tuple[Path, ...],
+    output_dir: Path,
+    clip_count: int,
+    frames: int,
+    hand: int,
+    head: bool,
+    append: bool,
+    overwrite: bool,
+    seed: int | None,
+    blender_bin: str | None,
+) -> None:
+    """Plan a dataset: write one directory per clip, ready to render.
+
+    Each clip gets its own sequence.json and animation.json, so it fully
+    describes itself and can be rendered, inspected or re-rendered on its own.
+    Nothing is rendered here — this takes seconds, so a plan can be checked and
+    thrown away before any machine time is spent on it.
+
+    Per clip the plan redraws the body (from the templates), the background,
+    the camera noise, vignette, distortion and field of view, and the pose
+    timeline.
+
+    \b
+        phanesim plan-clips --template data/sequences/model1/sequence.json \\
+            --template data/sequences/model2/sequence.json \\
+            --output dataset --clips 450 --frames 50 --hand 8
+    """
+    base_seed = seed if seed is not None else random.randrange(2**31)
+    rng = random.Random(base_seed)
+    click.echo(f"[phanesim] Seed {base_seed} -- pass --seed {base_seed} to plan this again.")
+
+    start = 0
+    if output_dir.exists():
+        existing = clip_dirs(output_dir)
+        if existing and not (append or overwrite):
+            raise click.ClickException(
+                f"{output_dir} already holds {len(existing)} clip(s) "
+                f"({existing[0].name} .. {existing[-1].name}).\n"
+                f"  --append     keep them and number on from clip_{next_clip_index(output_dir):05d}\n"
+                f"  --overwrite  replace them, re-rendering any frames already done"
+            )
+        if existing and append:
+            start = next_clip_index(output_dir)
+
+    loaded = [(t, json.loads(t.read_text())) for t in templates]
+
+    # The pose assets have to come from Blender, once per distinct model.
+    models: dict[str, Path] = {}
+    for path, data in loaded:
+        model = (path.parent / data["body_rig"]["body"]["model"]).resolve()
+        models[str(model)] = model
+
+    with tempfile.TemporaryDirectory() as tmp:
+        outs = {m: Path(tmp) / f"assets_{i}.json" for i, m in enumerate(models)}
+        expr = (
+            _sys_path_setup()
+            + "from pathlib import Path; "
+            + "from phanesim.render import enumerate_pose_assets; "
+            + "; ".join(f"enumerate_pose_assets(Path({m!r}), Path({str(outs[m])!r}))" for m in models)
+        )
+        click.echo(f"[phanesim] Enumerating pose assets in {len(models)} model(s) ...")
+        if (code := _run_blender(expr, blender_bin)) != 0:
+            sys.exit(code)
+        enumerated = {m: json.loads(outs[m].read_text()) for m in models}
+        assets_by_model = {m: [PoseAsset.from_dict(a) for a in enumerated[m]["assets"]] for m in models}
+        accessories_by_model = {m: list(enumerated[m].get("accessories", [])) for m in models}
+
+    # Backgrounds come from the directory the templates already point into.
+    hdri_dir = (loaded[0][0].parent / loaded[0][1]["hdri"]).resolve().parent
+    hdris = sorted(hdri_dir.glob("*.exr")) + sorted(hdri_dir.glob("*.hdr"))
+    if not hdris:
+        click.echo(f"Error: no HDRI files in {hdri_dir}", err=True)
+        sys.exit(1)
+    click.echo(f"[phanesim] {len(hdris)} background(s), {len(models)} body model(s).")
+
+    lanes = (("left",), ("right",)) + ((("head",),) if head else ())
+    output_dir.mkdir(parents=True, exist_ok=True)
+    tally: dict[str, int] = {}
+    worn_tally: dict[str, int] = {}
+    bare = 0
+
+    for n in range(clip_count):
+        i = start + n
+        template_path, template = rng.choice(loaded)
+        model = str((template_path.parent / template["body_rig"]["body"]["model"]).resolve())
+        hdri = rng.choice(hdris)
+
+        clip_dir = output_dir / f"clip_{i:05d}"
+        clip_dir.mkdir(parents=True, exist_ok=True)
+
+        motion = sample_pose_motion(
+            assets_by_model[model],
+            duration_ns=int(frames / 30.0 * NS_PER_SECOND),  # ~30 fps of plausible motion
+            name=f"clip_{i:05d}",
+            event_count=hand,
+            seed=rng.randrange(2**31),
+            model=model,
+            lanes=lanes,
+        )
+        motion.write(clip_dir / ANIMATION_FILE)
+
+        seq = json.loads(json.dumps(template))  # deep copy of plain JSON data
+        seq["name"] = f"clip_{i:05d}"
+        seq["frames"] = frames
+        seq["hand_motions"] = [ANIMATION_FILE]
+        seq["hdri"] = _shortest_path(hdri, clip_dir)
+        seq["body_rig"]["body"]["model"] = _shortest_path(Path(model), clip_dir)
+        seq["body_rig"]["cameras"] = [randomize_camera(c, rng) for c in seq["body_rig"]["cameras"]]
+        worn = choose_accessories(accessories_by_model[model], rng)
+        seq["accessories"] = worn
+        (clip_dir / SEQUENCE_FILE).write_text(json.dumps(seq, indent=2) + "\n")
+
+        tally[Path(model).stem] = tally.get(Path(model).stem, 0) + 1
+        tally[hdri.stem] = tally.get(hdri.stem, 0) + 1
+        bare = bare + 1 if not worn else bare
+        for a in worn:
+            worn_tally[a] = worn_tally.get(a, 0) + 1
+
+    span = f"clip_{start:05d} .. clip_{start + clip_count - 1:05d}"
+    click.echo(f"[phanesim] Planned {clip_count} clip(s) ({span}) = {clip_count * frames} frames in {output_dir}")
+    for name in sorted(tally):
+        click.echo(f"    {name:34} {tally[name]:5}")
+    click.echo(f"    {'bare hands':34} {bare:5}  ({bare / clip_count:.0%})")
+    for name in sorted(worn_tally):
+        click.echo(f"    {'wearing ' + name:34} {worn_tally[name]:5}")
+
+
+@cli.command(name="render-clips")
+@click.argument("dataset_dir", type=click.Path(path_type=Path, exists=True))
+@click.option("--overwrite", is_flag=True, default=False, help="Re-render clips already marked done.")
+@click.option(
+    "--blender",
+    "blender_bin",
+    default=None,
+    envvar="BLENDER_BIN",
+    show_envvar=True,
+    help="Path to the Blender executable. Auto-detected if not set.",
+)
+def render_clips_cmd(dataset_dir: Path, overwrite: bool, blender_bin: str | None) -> None:
+    """Render every clip in a planned dataset, skipping the ones already done.
+
+    Safe to interrupt: a clip is marked done only once its frames are written,
+    so re-running the same command picks up where it stopped and re-does at most
+    the clip that was in flight. That covers being killed by another job, and
+    covers the process dying on its own during a long run.
+
+    \b
+        phanesim render-clips dataset
+    """
+    expr = (
+        _sys_path_setup()
+        + "from pathlib import Path; "
+        + "from phanesim.render import render_clips; "
+        + f"render_clips(Path({str(dataset_dir.resolve())!r}), overwrite={overwrite!r})"
+    )
+    sys.exit(_run_blender(expr, blender_bin))
 
 
 def main() -> None:

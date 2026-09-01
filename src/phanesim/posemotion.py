@@ -3,26 +3,14 @@
 
 """Pose-asset motion descriptions and their Poisson-process sampler.
 
-A *motion description* is the timeline half of an animation: it says **which**
-pose asset is reached at **what** time, and nothing about bone values.  The bone
-values live in the pose assets inside the model .blend and are only resolved at
-render time.  Splitting the two means a description is a small, readable,
-diff-able JSON that can be generated, inspected and version-controlled without
-Blender.
+A *motion description* is the timeline half of an animation: which pose asset is
+reached at what time, and nothing about bone values.  Those live in the pose
+assets inside the model .blend and are resolved at render time, which keeps a
+description small, readable and diff-able.
 
-Timeline semantics
-------------------
-Each event names the asset that is *fully reached* at ``t_ns``.  Motion is
-continuous: the armature interpolates from one pose straight into the next over
-the whole gap between them, so no frame is ever a repeat of the one before it::
-
-    pose A reached      interpolating       pose B reached
-         t0 |---------------------------------| t1
-
-Every asset is a single-frame pose.  Multi-frame playback was removed once the
-pose library covered the hand shapes on its own: a played-back clip pinned the
-whole body to one authored motion, which is the opposite of what a frame-diverse
-dataset wants.
+Each event names the asset *fully reached* at ``t_ns``; the armature interpolates
+from one pose into the next across the whole gap, so consecutive frames always
+differ.  Every asset is a single-frame pose.
 
 This module is bpy-free so it can be imported outside Blender.
 """
@@ -36,21 +24,18 @@ from pathlib import Path
 
 NS_PER_SECOND = 1_000_000_000
 
-# Sampling defaults, used when the caller asks for neither a count nor a length.
+# Defaults for generate-motion's --events and --duration.
 DEFAULT_EVENT_COUNT = 8
 DEFAULT_DURATION_SECONDS = 20.0
 
 
 @dataclass
 class PoseEvent:
-    """A single pose asset reached at a point in time.
+    """A pose asset reached at a point in time.
 
-    Attributes:
-        t_ns:  Time at which the asset is fully reached, in nanoseconds.
-        asset: Name of the pose asset (an action inside the model .blend).
-        group: Body region the asset drives ("left", "right", "head", "body").
-               Events in different groups touch disjoint bones and are applied
-               independently, so they layer rather than replace.
+    *group* is the body region the asset drives: "left", "right", "head" or
+    "body".  Groups touch disjoint bones, so events from different groups layer
+    rather than replace one another.
     """
 
     t_ns: int
@@ -77,15 +62,7 @@ class PoseEvent:
 class PoseMotion:
     """An ordered timeline of pose events plus the parameters that produced it.
 
-    JSON schema:
-      {
-        "name":        "<str>",
-        "model":       "<path to the .blend holding the pose assets>",
-        "seed":        <int>,
-        "duration_ns": <int>,     -- nanoseconds, the canonical timeline length
-        "event_count": <int>,     -- derived, equals len(events)
-        "events":      [<PoseEvent dict>, ...]
-      }
+    Serialises to JSON as name, model, seed, duration_ns, event_count and events.
     """
 
     name: str
@@ -105,11 +82,7 @@ class PoseMotion:
 
     @property
     def t_end_ns(self) -> int:
-        """End of the timeline.
-
-        Every event is instantaneous and the sampler pins the last one to
-        duration_ns, so the declared length is the end.
-        """
+        """End of the timeline; the sampler pins the last event to duration_ns."""
         return int(self.duration_ns)
 
     def assets(self) -> list[str]:
@@ -121,9 +94,8 @@ class PoseMotion:
         return seen
 
     def to_dict(self) -> dict:
-        # event_count is derived from the events below; it is written so the file
-        # states its own size without counting, and is recomputed on every write
-        # rather than trusted on read.
+        # event_count is derived: written so the file states its own size,
+        # recomputed on every write rather than trusted on read.
         return {
             "name": self.name,
             "model": self.model,
@@ -162,13 +134,10 @@ class PoseMotion:
 class PoseAsset:
     """A single-frame pose asset discovered inside a model .blend.
 
-    *frame* is the frame its action holds the pose on, which is what the renderer
-    evaluates the action at to read the bone values out.
-
-    *group* records which part of the body the asset drives, derived from the
-    bones it animates rather than from its name.  Assets in different groups
-    touch disjoint bones and can therefore be combined freely, which is what
-    turns a library of N poses into a much larger space of configurations.
+    *frame* is the frame its action holds the pose on, which is where the
+    renderer evaluates it.  *group* is derived from the bones the asset animates
+    rather than from its name, so assets in different groups combine freely —
+    what turns a library of N poses into a much larger space of configurations.
     """
 
     name: str
@@ -204,46 +173,32 @@ def sample_pose_motion(
 ) -> PoseMotion:
     """Place exactly *event_count* poses at random times within *duration_ns*.
 
-    The count and the length are both given, so a request reads directly: four
-    poses in one second, ten poses in twenty seconds.  Only *which* poses and
-    *when* they land are random.
+    This is a Poisson process conditioned on its event count: a process with n
+    arrivals in [0, T] has them distributed exactly as the order statistics of n
+    uniform draws on [0, T], so drawing uniforms and sorting them *is* the
+    process rather than an approximation of it.
 
-    This is still a Poisson process, conditioned on its event count.  A Poisson
-    process observed to produce n arrivals in [0, T] has those arrivals
-    distributed exactly as the order statistics of n independent uniform draws on
-    [0, T] — so drawing uniforms and sorting them is not an approximation of the
-    process, it is the process with its count fixed.
-
-    The first pose is keyed at t=0 and the last at duration_ns, so motion spans
-    the whole clip and no frames are left frozen at either end; the remaining
-    ones fall anywhere in between.  No pose is ever drawn twice in a row, since
-    an event that changes nothing would freeze every frame until the next one.
-    There is no minimum spacing: poses may land arbitrarily close together, and
-    the armature simply moves faster to reach the next one in time.
-
-    Both rules apply per *lane*.  A lane is one timeline; giving each hand its
-    own lane lets them change at different moments, while a single lane covering
-    both draws one pose at a time and lets whichever hand it belongs to move.
-    Because a pose only ever keys its own bones, poses from different lanes are
-    held simultaneously rather than replacing one another.
+    Two rules keep every limb moving, both enforced per body group rather than
+    per lane: the first pose is keyed at t=0 and the last at duration_ns, and no
+    pose is drawn twice running for the same group.  Per lane they would not be
+    enough — a shared lane can repeat one hand's pose around the other hand's
+    event, and only one group can own the event pinned to the end.  There is no
+    minimum spacing; poses may land arbitrarily close together.
 
     Args:
         assets:      Pose assets available to draw from.
         duration_ns: Length of the timeline in nanoseconds.
         name:        Name recorded in the description.
-        event_count: Exact number of poses, including the one at t=0.
-        seed:        Seed for reproducibility; None draws a random one.  Either
-                     way the value used is recorded on the returned PoseMotion,
-                     so any timeline can be regenerated exactly.
-        model:       Path to the .blend the assets came from, recorded for reference.
-        rest_asset:  Asset to key at t=0 for the group it belongs to; the other
-                     groups open on a random pose.  Defaults to random throughout.
-        lanes:       Independent timelines to sample, each named by the groups
-                     it draws from.  One lane over ("left", "right", "body") is
-                     a single shared timeline where every event is whichever
-                     pose was drawn; two lanes ("left",) and ("right",) give
-                     each hand its own schedule.  Every lane gets event_count
-                     events, so the total is event_count x len(lanes).
+        event_count: Exact number of poses per lane, including the one at t=0.
+        seed:        None draws a random one.  Either way it is recorded on the
+                     result, so any timeline can be regenerated exactly.
+        model:       Path to the .blend the assets came from, for reference.
+        rest_asset:  Asset to key at t=0 for its own group; other groups open on
+                     a random pose.
+        lanes:       Independent timelines, each named by the groups it draws
+                     from.  One lane over ("left", "right", "body") shares a
+                     single schedule; ("left",) and ("right",) give each hand its
+                     own.  Total events is event_count x len(lanes).
 
     Returns:
         A PoseMotion whose events are sorted by time.
@@ -270,36 +225,44 @@ def sample_pose_motion(
 
     def sample_lane(pool: list[PoseAsset]) -> list[PoseEvent]:
         """Draw one independent timeline from *pool*."""
-        # The opening pose is keyed at t=0 so the clip does not start mid-motion.
+        # Keyed at t=0 so the clip does not start mid-motion.
         start = next((a for a in pool if a.name == rest_asset), None) if rest_asset else rng.choice(pool)
         if start is None:
             start = rng.choice(pool)
         out = [make(0, start)]
 
-        # Interior times are the order statistics of uniform draws — the arrival
-        # times of the conditioned process.  The final event is pinned to the end
-        # of the timeline instead of being drawn: uniform placement leaves the
-        # clip ending part way through, and whatever pose was last reached then
-        # freezes for the remainder.  Sampled freely, that dead tail averages a
-        # quarter of a four-event clip.
+        # Interior times are the order statistics of uniform draws.  The last
+        # event is pinned rather than drawn: placed uniformly it leaves the clip
+        # ending part way through, freezing the final pose for the remainder —
+        # a dead tail averaging a quarter of a four-event clip.
         times = sorted(rng.randrange(1, max(2, duration_ns)) for _ in range(max(0, event_count - 2)))
         if event_count > 1:
             times.append(duration_ns)
 
-        previous = start.name
+        # Tracked per group: two events in a shared lane can name the same
+        # left-hand pose with a right-hand event between them, which freezes that
+        # hand across the span even though the lane never repeats itself.
+        previous: dict[str, str] = {start.group: start.name}
         for t_ns in times:
-            # Never draw the pose that is already showing: an event that changes
-            # nothing freezes every frame until the next one.
-            candidates = [a for a in pool if a.name != previous] or pool
+            candidates = [a for a in pool if a.name != previous.get(a.group)] or pool
             asset = rng.choice(candidates)
             out.append(make(t_ns, asset))
-            previous = asset.name
+            previous[asset.group] = asset.name
+
+        # Pinning only the lane's last event saves whichever group owned it; the
+        # rest hold their final pose to the end.  Whole-body poses are left where
+        # they fall, since they key both hands and would fight the hands' own
+        # closing poses.
+        for group in {e.group for e in out} - {"body"}:
+            latest = [e for e in out if e.group == group][-1]
+            # Unless it is that group's opening event: moving it would leave the
+            # clip starting from rest with nothing posed.
+            if latest.t_ns != 0:
+                latest.t_ns = duration_ns
         return out
 
-    # Each lane is sampled independently and the timelines are merged.  Where the
-    # lanes drive disjoint bones -- the two hands, or a hand and the head -- a
-    # library of L left and R right poses spans L x R configurations rather than
-    # L + R, because both are held at once.
+    # Lanes are sampled independently and merged.  Because they drive disjoint
+    # bones, L left and R right poses span L x R configurations, not L + R.
     pools = [[a for a in assets if a.group in lane] for lane in lanes]
     if not any(pools):
         available = sorted({a.group for a in assets})

@@ -56,5 +56,6 @@
     "animation01.json"
   ],
   "frames": 21,
-  "hdri": "../../hdri/brown_photostudio_02_2k.exr"
+  "hdri": "../../hdri/modern_evening_street_2k.exr",
+  "accessories": []
 }

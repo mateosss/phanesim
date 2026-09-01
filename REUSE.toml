@@ -27,9 +27,44 @@ SPDX-FileCopyrightText = [
 ]
 SPDX-License-Identifier = "AGPL-3.0-only AND CC-BY-4.0"
 
+# Environment maps from Poly Haven, all CC0.  Grouped by author rather than
+# covered by a wildcard: CC0 waives the requirement to credit them, but the
+# record is worth keeping.  A new HDRI needs adding to its author's list here,
+# and `reuse lint` fails until it has one.
 [[annotations]]
-path = "data/hdri/**"
+path = [
+    "data/hdri/brown_photostudio_02_2k.exr",
+    "data/hdri/blue_photo_studio_2k.exr",
+    "data/hdri/christmas_photo_studio_01_2k.exr",
+    "data/hdri/small_empty_room_3_2k.exr",
+    "data/hdri/studio_garden_2k.exr",
+]
 SPDX-FileCopyrightText = "Sergej Majboroda"
+SPDX-License-Identifier = "CC0-1.0"
+
+[[annotations]]
+path = ["data/hdri/sunny_country_road_2k.exr", "data/hdri/modern_evening_street_2k.exr"]
+SPDX-FileCopyrightText = "Grzegorz Wronkowski"
+SPDX-License-Identifier = "CC0-1.0"
+
+[[annotations]]
+path = ["data/hdri/rostock_laage_airport_2k.exr", "data/hdri/cannon_2k.exr"]
+SPDX-FileCopyrightText = "Greg Zaal"
+SPDX-License-Identifier = "CC0-1.0"
+
+[[annotations]]
+path = "data/hdri/newman_cafeteria_2k.exr"
+SPDX-FileCopyrightText = "Savva Zakharov"
+SPDX-License-Identifier = "CC0-1.0"
+
+[[annotations]]
+path = "data/hdri/penguin_museum_2k.exr"
+SPDX-FileCopyrightText = "Jenelle van Heerden"
+SPDX-License-Identifier = "CC0-1.0"
+
+[[annotations]]
+path = "data/hdri/braustuble_alley_2k.exr"
+SPDX-FileCopyrightText = "Elvis Posa"
 SPDX-License-Identifier = "CC0-1.0"
 
 # Covers every sequence directory, including the generated animation

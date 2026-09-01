@@ -25,9 +25,12 @@ from phanesim.cli import (
 
 
 class TestParseAccessories:
-    def test_default_wears_nothing(self):
-        # The renderer starts from bare hands, so a frame only ever shows what
-        # was explicitly asked for rather than whatever the .blend was saved with.
+    def test_omitted_defers_to_the_sequence_file(self):
+        # Not "leave the .blend as saved" -- the sequence's own list decides, and
+        # that is empty unless it says otherwise.
+        assert _parse_accessories(None) == "None"
+
+    def test_none_wears_nothing(self):
         assert eval(_parse_accessories("none")) == set()
 
     def test_none_removes_everything(self):

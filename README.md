@@ -183,6 +183,8 @@ Four commands:
 | `generate-motion` | **Step 1.** Invents a random timeline of poses and writes it as `animationNN.json`. |
 | `generate` | **Step 2.** Renders that timeline to PNG frames plus `joints_2d.csv`. |
 | `preview` | Builds the animation into a `.blend` you can open in Blender. Renders nothing. |
+| `plan-clips` | Plans a whole dataset: one directory per clip. Renders nothing. |
+| `render-clips` | Renders a planned dataset. Safe to interrupt and re-run. |
 | `validate` | Checks that a JSON file matches its schema. |
 
 The models live in `data/models/model1/` and `data/models/model2/`. Each is a
@@ -332,12 +334,12 @@ This writes to `output_folder/cam_<name>/`:
 `--frames N` renders N frames spread evenly across the whole motion, so
 `--frames 2` gives the first and last frame, and any number still covers the
 entire animation. Use a small number to check something quickly and a large one
-for the real dataset. Rendering takes roughly 5 seconds per frame.
+for the real dataset. Render speed depends heavily on the machine — measure
+your own before planning a long run.
 
 #### Accessories
 
-`--accessories` picks what the model wears. **Nothing is worn by default**, so a
-frame shows exactly what you asked for. `model1` has four to choose from:
+`--accessories` overrides what the model wears. `model1` has four:
 
 | Name | What it is | Where |
 |---|---|---|
@@ -349,13 +351,17 @@ frame shows exactly what you asked for. `model1` has four to choose from:
 ```bash
 --accessories all              # wear everything
 --accessories watch1,ring1     # just these two
---accessories none             # bare hands (the default)
+--accessories none             # bare hands
 ```
 
-Render the same motion twice with different accessories to get two variations of
-the same frames. `model2` has none of them, so it prints a note and renders bare.
+Omit the option and the sequence file's own `accessories` list decides, which is
+empty unless it says otherwise. The `.blend`'s saved state is never inherited —
+`model1.blend` is saved with all four showing, and inheriting that silently put
+accessories into renders nobody asked for.
 
-#### Camera movement
+`model2` carries none of the four, so its clips are always bare.
+
+#### Simple Camera movement
 
 Two things move the camera, and they add up:
 
@@ -493,6 +499,117 @@ After editing, check the file is still valid:
 uv run phanesim validate body_sequence data/sequences/model1/sequence.json
 ```
 
+### Making a dataset — `plan-clips` and `render-clips`
+
+The two steps above make **one** animation. For a training set you want hundreds,
+each with a different body, background and camera. That is what these two do.
+
+A **clip** is one continuous stretch of frames in its own directory, with its own
+`sequence.json` and `animation.json`. Everything varies *between* clips —
+background, body, camera — and only the motion varies *within* one.
+
+```bash
+# 1. Plan. Writes one directory per clip. No rendering, takes seconds.
+uv run phanesim plan-clips --template data/sequences/model1/sequence.json \
+    --output dataset --clips 60 --frames 10 --hand 6
+
+# ...then the other body, numbering on from where the first left off.
+uv run phanesim plan-clips --template data/sequences/model2/sequence.json \
+    --output dataset --clips 40 --frames 10 --hand 6 --append
+
+# 2. Render. Interrupt it whenever; run it again to carry on.
+uv run phanesim render-clips dataset
+```
+
+Planning each body separately is how you control the mix. Passing two
+`--template` options to one command works too, but it draws one at random per
+clip, so 10 clips can come out 2:8 rather than 5:5.
+
+`plan-clips` refuses to write into a dataset that already has clips. Use
+`--append` to add to it, or `--overwrite` to replace it — overwriting also
+invalidates any frames already rendered, so they get rendered again.
+
+**The head moves by default.** Each clip gets `--hand` poses for the left hand,
+`--hand` for the right and `--hand` for the head, all on separate timelines, so
+`--hand 8` is 24 events. The camera is anchored to the head bone, so this also
+moves the camera and changes the background. Pass `--no-head` to hold it still.
+
+```
+dataset/
+  clip_00000/
+    sequence.json     # this clip's body, background and camera
+    animation.json    # this clip's pose timeline, with its seed
+    cam_head0/
+      frame_000000.png ... frame_000049.png
+      joints_2d.csv
+      joints_3d.csv
+    _done.json        # written last: "these frames match these settings"
+  clip_00001/
+  ...
+```
+
+#### Resuming
+
+`render-clips` writes `_done.json` only after a clip's frames are on disk, and
+skips clips that already have one. So if the run is killed — by another job on a
+shared machine, or by the process dying on its own — **just run the same command
+again**. It re-does at most the clip that was in flight.
+
+`_done.json` stores a hash of `sequence.json` and `animation.json`, so editing a
+clip's settings marks it un-done and it gets re-rendered. That stops a half-changed
+dataset from looking finished. Use `--overwrite` to force everything.
+
+#### What varies between clips
+
+| | How |
+|---|---|
+| body | picked from the `--template` files |
+| background | picked from `data/hdri/` |
+| pose timeline | fresh draw, its seed stored in `animation.json` |
+| accessories | 50% bare, 30% one, 15% two, 5% three or four |
+| clip length | `--duration` is derived as `frames / 30`, i.e. 30 fps |
+| sensor noise | `noise_std` 0.05–0.40 |
+| vignette | `vignette_factor` 0.30–0.70 |
+| lens distortion | `distortion` 0.25–0.40, with `lens_scale` following it |
+| field of view | `fx` = `fy` 210–270, i.e. about 100°–113° |
+
+Three things are deliberately **not** varied:
+
+- **`cx` / `cy`** — Blender renders with the principal point at the image centre
+  and no shift is applied, so moving them would put the ground truth in the wrong
+  place while the picture stayed the same.
+- **`fy` on its own** — only `fx` sets the Blender lens, so `fy` has to match it.
+- **`distortion` beyond 0.40** — the forward map in `distort_pixel` was fitted
+  and checked against Blender up to about 0.4. Past that the 2D keypoints would
+  drift away from the pixels, silently.
+
+`render-clips` always writes `joints_3d.csv` and never writes the `_debug.png`
+overlays: keypoints drawn onto the image would be learned as features.
+
+#### Choosing `--frames` and `--hand`
+
+They are separate knobs pulling opposite ways. `--frames` decides how densely
+the pose path is sampled; `--hand` decides how many poses are on it. Raising
+`--frames` alone samples the *same* path more finely, so frames get more alike.
+
+What matters is how many frames one pose change takes — aim for **1 to 2**:
+
+| | frames per pose change | movement between frames |
+|---|---|---|
+| `--frames 10 --hand 4` | 3.3 | 66 px |
+| **`--frames 10 --hand 6`** | **2.0** | 87 px |
+| `--frames 10 --hand 8` | 1.4 | 124 px |
+| `--frames 20 --hand 6` | 4.0 | 41 px |
+
+`--frames 10 --hand 6` is the default choice. `--duration` is derived from the
+frame count (30 fps) and does not affect the images.
+
+#### Splitting for training
+
+Split **by clip, never by frame**. A clip's frames share one background, one body
+and one set of camera settings, so putting some in train and some in test lets a
+network score well on what it has effectively already seen.
+
 ### Validate
 
 ```bash
@@ -535,7 +652,19 @@ which requires the author to be credited. Commercial use is allowed.
 carry **AGPL-3.0-only**. `model1.blend` is therefore a combined work under
 `AGPL-3.0-only AND CC-BY-4.0`.
 
-### Environment map
+### Environment maps
 
-`data/hdri/brown_photostudio_02_2k.exr` by Sergej Majboroda, **CC0-1.0**
-(no attribution required, credited here as a courtesy).
+All from Poly Haven, all **CC0-1.0** — no attribution required, credited here as
+a courtesy. Each provides both the lighting and the background of a render.
+
+| Author | Files |
+|---|---|
+| Sergej Majboroda | `brown_photostudio_02`, `blue_photo_studio`, `christmas_photo_studio_01`, `small_empty_room_3`, `studio_garden` |
+| Grzegorz Wronkowski | `sunny_country_road`, `modern_evening_street` |
+| Greg Zaal | `rostock_laage_airport`, `cannon` |
+| Savva Zakharov | `newman_cafeteria` |
+| Jenelle van Heerden | `penguin_museum` |
+| Elvis Posa | `braustuble_alley` |
+
+All files are `_2k.exr`. Adding one means adding it to its author's list in
+`REUSE.toml`; `reuse lint` fails until it has an entry.

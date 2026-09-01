@@ -107,6 +107,7 @@ class BodySequence:
         "hand_motions": ["<path-to-animation-json>", ...],
         "frames":       <int>,
         "hdri":         "<path>"           -- optional
+        "accessories":  ["watch1", ...]    -- optional, empty means bare hands
       }
     """
 
@@ -115,6 +116,9 @@ class BodySequence:
     hand_motions: list[PoseMotion]
     frames: int  # frames per motion, spread evenly across the timeline
     hdri: Path | None = None
+    # What the body wears for this whole clip.  Absent means bare: the state the
+    # .blend happens to be saved in is never inherited.
+    accessories: tuple[str, ...] = ()
 
     @classmethod
     def from_dict(cls, data: dict, base_dir: Path) -> BodySequence:
@@ -122,6 +126,7 @@ class BodySequence:
             name=str(data["name"]),
             body_rig=BodyRig.from_dict(data["body_rig"], base_dir),
             hand_motions=[PoseMotion.from_path(base_dir / p) for p in data["hand_motions"]],
+            accessories=tuple(data.get("accessories", ())),
             frames=int(data["frames"]),
             hdri=(base_dir / data["hdri"]) if data.get("hdri") else None,
         )

@@ -29,6 +29,7 @@ LAYERED = (
     [PoseAsset(name=f"L{i}", frame=1, group="left") for i in range(3)]
     + [PoseAsset(name=f"R{i}", frame=1, group="right") for i in range(4)]
     + [PoseAsset(name=f"H{i}", frame=1, group="head") for i in range(2)]
+    + [PoseAsset(name=f"B{i}", frame=1, group="body") for i in range(2)]
 )
 
 
@@ -104,10 +105,10 @@ class TestSamplePoseMotion:
         # drawn, so the count is the count and not a per-part count.
         motion = sample_pose_motion(LAYERED, 5 * NS_PER_SECOND, seed=3, event_count=20, lanes=SHARED_LANE)
         assert motion.event_count == 20
-        assert {e.group for e in motion.events} == {"left", "right"}
+        assert {e.group for e in motion.events} == {"left", "right", "body"}
 
     def test_lanes_with_no_assets_are_skipped(self):
-        motion = sample_pose_motion(LAYERED, 5 * NS_PER_SECOND, seed=1, event_count=3, lanes=(("left",), ("body",)))
+        motion = sample_pose_motion(LAYERED, 5 * NS_PER_SECOND, seed=1, event_count=3, lanes=(("left",), ("nose",)))
         assert {e.group for e in motion.events} == {"left"}
 
     def test_unknown_lane_rejected(self):
@@ -267,3 +268,53 @@ class TestContinuousMotion:
         motion = sample_pose_motion(LAYERED, 4 * NS_PER_SECOND, seed=3, event_count=6, lanes=SPLIT_LANES)
         times = [e.t_ns for e in motion.events]
         assert times == sorted(times)
+
+
+class TestSharedLaneKeepsEveryLimbMoving:
+    """A lane shared by both hands must still satisfy the rules per hand.
+
+    Satisfying them only per lane leaves one hand frozen: two events can name the
+    same left-hand pose with a right-hand event between them, and only one group
+    can own the event pinned to the end of the clip.
+    """
+
+    SHARED = (("left", "right", "body"),)
+
+    def _events(self, group, motion):
+        return [e for e in motion.events if e.group == group]
+
+    @pytest.mark.parametrize("seed", range(30))
+    def test_no_limb_repeats_a_pose_back_to_back(self, seed):
+        motion = sample_pose_motion(LAYERED, 4 * NS_PER_SECOND, seed=seed, event_count=12, lanes=self.SHARED)
+        for group in ("left", "right", "body"):
+            names = [e.asset for e in self._events(group, motion)]
+            assert all(a != b for a, b in itertools.pairwise(names)), (group, names)
+
+    @pytest.mark.parametrize("seed", range(30))
+    def test_every_hand_reaches_the_end_of_the_clip(self, seed):
+        motion = sample_pose_motion(LAYERED, 4 * NS_PER_SECOND, seed=seed, event_count=12, lanes=self.SHARED)
+        for group in ("left", "right"):
+            events = self._events(group, motion)
+            if events:
+                assert events[-1].t_ns == motion.duration_ns, group
+
+    def test_a_lone_opening_pose_is_left_at_zero(self):
+        # Moving it would leave the clip starting from rest with nothing posed.
+        only_left = [a for a in LAYERED if a.group == "left"][:1]
+        motion = sample_pose_motion(only_left, 4 * NS_PER_SECOND, seed=1, event_count=1, lanes=(("left",),))
+        assert [e.t_ns for e in motion.events] == [0]
+
+    @pytest.mark.parametrize("n", [1, 2, 5, 12, 30])
+    def test_event_count_is_unchanged_by_the_pinning(self, n):
+        # The fix reassigns times; it must never add or drop an event.
+        motion = sample_pose_motion(LAYERED, 4 * NS_PER_SECOND, seed=n, event_count=n, lanes=self.SHARED)
+        assert motion.event_count == n
+
+    @pytest.mark.parametrize("seed", range(30))
+    def test_pinning_never_moves_an_event_backwards(self, seed):
+        # Times are reassigned, so the timeline must still run forwards and stay
+        # inside the clip.
+        motion = sample_pose_motion(LAYERED, 4 * NS_PER_SECOND, seed=seed, event_count=12, lanes=self.SHARED)
+        times = [e.t_ns for e in motion.events]
+        assert times == sorted(times)
+        assert all(0 <= t <= motion.duration_ns for t in times)
