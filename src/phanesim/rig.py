@@ -119,6 +119,9 @@ class BodySequence:
     # What the body wears for this whole clip.  Absent means bare: the state the
     # .blend happens to be saved in is never inherited.
     accessories: tuple[str, ...] = ()
+    # Where the environment map starts, and how far it turns each frame.
+    hdri_spin_deg: float = 0.0
+    hdri_spin_step_deg: float = 0.0
 
     @classmethod
     def from_dict(cls, data: dict, base_dir: Path) -> BodySequence:
@@ -127,6 +130,8 @@ class BodySequence:
             body_rig=BodyRig.from_dict(data["body_rig"], base_dir),
             hand_motions=[PoseMotion.from_path(base_dir / p) for p in data["hand_motions"]],
             accessories=tuple(data.get("accessories", ())),
+            hdri_spin_deg=float(data.get("hdri_spin_deg", 0.0)),
+            hdri_spin_step_deg=float(data.get("hdri_spin_step_deg", 0.0)),
             frames=int(data["frames"]),
             hdri=(base_dir / data["hdri"]) if data.get("hdri") else None,
         )

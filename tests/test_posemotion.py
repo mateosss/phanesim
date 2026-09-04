@@ -5,19 +5,31 @@ from __future__ import annotations
 
 import itertools
 import json
+from collections import Counter
 
 import pytest
 
 from phanesim.posemotion import (
+    HAND_POSE_SHARE,
     NS_PER_SECOND,
+    POSE_ALPHA,
+    TIME_JITTER,
     PoseAsset,
     PoseEvent,
     PoseMotion,
+    PosePick,
+    _draw_weight,
     sample_pose_motion,
 )
 
+
+def names(event) -> list[str]:
+    """Asset names in one event's bundle."""
+    return [p.asset for p in event.poses]
+
+
 # Single-group library: the sampler then behaves as one flat timeline.
-POSES = [PoseAsset(name=f"Pose_{i}", frame=1, group="right") for i in range(5)]
+POSES = [PoseAsset(name=f"Pose_{i}", frame=1, group="right", part="arm") for i in range(5)]
 
 # Multi-group library: 3 left x 4 right x 2 head, all touching disjoint bones.
 # One timeline per body part, the arrangement --hand --head asks for.
@@ -26,8 +38,8 @@ SPLIT_LANES = (("left",), ("right",), ("head",))
 SHARED_LANE = (("left", "right", "body"),)
 
 LAYERED = (
-    [PoseAsset(name=f"L{i}", frame=1, group="left") for i in range(3)]
-    + [PoseAsset(name=f"R{i}", frame=1, group="right") for i in range(4)]
+    [PoseAsset(name=f"L{i}", frame=1, group="left", part="arm") for i in range(3)]
+    + [PoseAsset(name=f"R{i}", frame=1, group="right", part="arm") for i in range(4)]
     + [PoseAsset(name=f"H{i}", frame=1, group="head") for i in range(2)]
     + [PoseAsset(name=f"B{i}", frame=1, group="body") for i in range(2)]
 )
@@ -44,12 +56,12 @@ class TestPoseAsset:
 
 class TestPoseEvent:
     def test_roundtrip(self):
-        event = PoseEvent(t_ns=1000, asset="Right_ok", group="right")
+        event = PoseEvent(t_ns=1000, poses=[PosePick("Right_ok", 0.7)], group="right")
         assert PoseEvent.from_dict(event.to_dict()) == event
 
     def test_an_event_is_only_a_time_a_name_and_a_group(self):
-        # Nothing about playback: every asset is a single-frame pose.
-        assert set(PoseEvent(t_ns=1000, asset="Right_ok").to_dict()) == {"t_ns", "asset", "group"}
+        # An event is a bundle of picks, each with how far it is blended in.
+        assert set(PoseEvent(t_ns=1000, poses=[PosePick("Right_ok")]).to_dict()) == {"t_ns", "group", "poses"}
 
 
 class TestSamplePoseMotion:
@@ -62,7 +74,7 @@ class TestSamplePoseMotion:
         # The whole point of the generator: each run is a different timeline.
         a = sample_pose_motion(POSES, 60 * NS_PER_SECOND, seed=1)
         b = sample_pose_motion(POSES, 60 * NS_PER_SECOND, seed=2)
-        assert [e.asset for e in a.events] != [e.asset for e in b.events] or [e.t_ns for e in a.events] != [
+        assert [names(e) for e in a.events] != [names(e) for e in b.events] or [e.t_ns for e in a.events] != [
             e.t_ns for e in b.events
         ]
 
@@ -139,7 +151,7 @@ class TestSamplePoseMotion:
 
     def test_rest_asset_selects_opening_pose(self):
         motion = sample_pose_motion(POSES, 20 * NS_PER_SECOND, seed=2, rest_asset="Pose_3")
-        assert motion.events[0].asset == "Pose_3"
+        assert "Pose_3" in names(motion.events[0])
 
     def test_empty_assets_rejected(self):
         with pytest.raises(ValueError, match="no pose assets"):
@@ -182,8 +194,8 @@ class TestPoseMotionIO:
                 "name": "x",
                 "duration_ns": 10 * NS_PER_SECOND,
                 "events": [
-                    {"t_ns": 5000, "asset": "b"},
-                    {"t_ns": 1000, "asset": "a"},
+                    {"t_ns": 5000, "poses": [{"asset": "b"}]},
+                    {"t_ns": 1000, "poses": [{"asset": "a"}]},
                 ],
             }
         )
@@ -195,16 +207,18 @@ class TestPoseMotionIO:
                 "name": "x",
                 "duration_ns": 10 * NS_PER_SECOND,
                 "events": [
-                    {"t_ns": 0, "asset": "a"},
-                    {"t_ns": 1, "asset": "b"},
-                    {"t_ns": 2, "asset": "a"},
+                    {"t_ns": 0, "poses": [{"asset": "a"}]},
+                    {"t_ns": 1, "poses": [{"asset": "b"}]},
+                    {"t_ns": 2, "poses": [{"asset": "a"}]},
                 ],
             }
         )
         assert motion.assets() == ["a", "b"]
 
     def test_t_end_is_the_declared_duration(self):
-        motion = PoseMotion.from_dict({"name": "x", "duration_ns": 1000, "events": [{"t_ns": 900, "asset": "w"}]})
+        motion = PoseMotion.from_dict(
+            {"name": "x", "duration_ns": 1000, "events": [{"t_ns": 900, "poses": [{"asset": "w"}]}]}
+        )
         assert motion.t_end_ns == 1000
 
     def test_written_file_is_valid_json(self, tmp_path):
@@ -249,15 +263,15 @@ class TestContinuousMotion:
         # Across groups a repeat is meaningless: they drive different bones.
         motion = sample_pose_motion(LAYERED, 5 * NS_PER_SECOND, seed=seed, event_count=12, lanes=SPLIT_LANES)
         for group in ("left", "right", "head"):
-            assets = [e.asset for e in motion.events if e.group == group]
-            assert all(a != b for a, b in itertools.pairwise(assets)), (group, assets)
+            picked = [names(e) for e in motion.events if e.group == group]
+            assert all(a != b for a, b in itertools.pairwise(picked)), (group, picked)
 
     def test_a_single_available_asset_still_terminates(self):
         # With nothing else to pick, repeats are unavoidable and must be allowed.
-        only = [PoseAsset(name="Solo", frame=1, group="right")]
+        only = [PoseAsset(name="Solo", frame=1, group="right", part="arm")]
         motion = sample_pose_motion(only, NS_PER_SECOND, seed=1, event_count=4)
         assert motion.event_count == 4
-        assert {e.asset for e in motion.events} == {"Solo"}
+        assert {n for e in motion.events for n in names(e)} == {"Solo"}
 
     def test_event_count_is_still_exact_with_both_rules(self):
         for n in (1, 2, 5, 40):
@@ -287,15 +301,17 @@ class TestSharedLaneKeepsEveryLimbMoving:
     def test_no_limb_repeats_a_pose_back_to_back(self, seed):
         motion = sample_pose_motion(LAYERED, 4 * NS_PER_SECOND, seed=seed, event_count=12, lanes=self.SHARED)
         for group in ("left", "right", "body"):
-            names = [e.asset for e in self._events(group, motion)]
-            assert all(a != b for a, b in itertools.pairwise(names)), (group, names)
+            picked = [names(e) for e in self._events(group, motion)]
+            assert all(a != b for a, b in itertools.pairwise(picked)), (group, picked)
 
     @pytest.mark.parametrize("seed", range(30))
     def test_every_hand_reaches_the_end_of_the_clip(self, seed):
         motion = sample_pose_motion(LAYERED, 4 * NS_PER_SECOND, seed=seed, event_count=12, lanes=self.SHARED)
         for group in ("left", "right"):
             events = self._events(group, motion)
-            if events:
+            # A side whose only event is the opening one is left alone: moving it
+            # would start the clip from rest with nothing posed.
+            if len(events) > 1:
                 assert events[-1].t_ns == motion.duration_ns, group
 
     def test_a_lone_opening_pose_is_left_at_zero(self):
@@ -318,3 +334,211 @@ class TestSharedLaneKeepsEveryLimbMoving:
         times = [e.t_ns for e in motion.events]
         assert times == sorted(times)
         assert all(0 <= t <= motion.duration_ns for t in times)
+
+
+class TestTimesAreJittered:
+    """Gaps are bounded so no stretch of a short clip looks frozen."""
+
+    POOL = [PoseAsset(name=f"P{i}", frame=1, group="right", part="arm") for i in range(12)]
+
+    def _gaps(self, n, seed):
+        m = sample_pose_motion(self.POOL, 10 * NS_PER_SECOND, seed=seed, event_count=n)
+        t = [e.t_ns for e in m.events]
+        return [(b - a) / m.duration_ns for a, b in itertools.pairwise(t)]
+
+    @pytest.mark.parametrize("n", [4, 6, 10, 20])
+    def test_no_gap_exceeds_the_jitter_bound(self, n):
+        # An evenly spaced grid nudged by +-TIME_JITTER can stretch a gap to at
+        # most (1 + 2*TIME_JITTER) spacings.
+        bound = (1 + 2 * TIME_JITTER) / (n - 1) + 1e-6
+        for seed in range(40):
+            assert max(self._gaps(n, seed)) <= bound, (n, seed)
+
+    @pytest.mark.parametrize("n", [4, 6, 10])
+    def test_times_still_differ_between_seeds(self, n):
+        # Bounded, not fixed: the grid is jittered, not snapped to.
+        runs = {
+            tuple(e.t_ns for e in sample_pose_motion(self.POOL, 10 * NS_PER_SECOND, seed=s, event_count=n).events)
+            for s in range(20)
+        }
+        assert len(runs) == 20
+
+    def test_event_count_is_unchanged(self):
+        for n in (1, 2, 5, 30):
+            assert sample_pose_motion(self.POOL, 10 * NS_PER_SECOND, seed=n, event_count=n).event_count == n
+
+    def test_endpoints_are_still_pinned(self):
+        for seed in range(20):
+            m = sample_pose_motion(self.POOL, 10 * NS_PER_SECOND, seed=seed, event_count=6)
+            assert m.events[0].t_ns == 0
+            assert m.events[-1].t_ns == m.duration_ns
+
+
+# A full per-joint library for one hand, as model1 now has.
+LIMB = (
+    [PoseAsset(name=f"Arm{i}", frame=1, group="left", part="arm") for i in range(4)]
+    + [PoseAsset(name=f"Fore{i}", frame=1, group="left", part="forearm") for i in range(3)]
+    + [PoseAsset(name=f"Wri{i}", frame=1, group="left", part="wrist") for i in range(3)]
+    + [
+        PoseAsset(name=f"{f}{i}", frame=1, group="left", part=f"finger:{f}")
+        for f in ("thumb", "index", "middle", "ring", "pinky")
+        for i in range(3)
+    ]
+)
+
+
+class TestBundles:
+    """One event sets a whole limb, because one joint alone barely moves it."""
+
+    LANE = (("left",),)
+
+    def _events(self, n=8, seed=0):
+        m = sample_pose_motion(LIMB, 5 * NS_PER_SECOND, seed=seed, event_count=n, lanes=self.LANE)
+        return m.events
+
+    def _parts(self, event):
+        by_name = {a.name: a for a in LIMB}
+        return [by_name[p.asset].part for p in event.poses]
+
+    def test_event_count_still_means_events(self):
+        # A bundle is one event, however many poses it holds.
+        for n in (1, 4, 8, 20):
+            assert len(self._events(n)) == n
+
+    def test_every_event_sets_arm_forearm_and_wrist(self):
+        # The arm dominates what the camera sees; an event that left it alone
+        # would barely change the picture.
+        for e in self._events(30):
+            parts = self._parts(e)
+            assert {"arm", "forearm", "wrist"} <= set(parts)
+
+    def test_every_finger_count_from_one_to_five_occurs(self):
+        counts = Counter()
+        for seed in range(60):
+            for e in self._events(10, seed=seed):
+                counts[sum(1 for p in self._parts(e) if p.startswith("finger:"))] += 1
+        assert set(counts) == {1, 2, 3, 4, 5}
+
+    def test_two_and_three_fingers_are_the_common_case(self):
+        counts = Counter()
+        for seed in range(60):
+            for e in self._events(10, seed=seed):
+                counts[sum(1 for p in self._parts(e) if p.startswith("finger:"))] += 1
+        total = sum(counts.values())
+        for rare in (1, 4, 5):
+            assert counts[2] / total > counts[rare] / total
+            assert counts[3] / total > counts[rare] / total
+
+    def test_a_part_is_never_set_twice_in_one_event(self):
+        for e in self._events(30):
+            parts = self._parts(e)
+            assert len(parts) == len(set(parts))
+
+    def test_alphas_stay_in_range(self):
+        lo, hi = POSE_ALPHA
+        for e in self._events(30):
+            assert all(lo <= p.alpha <= hi for p in e.poses)
+
+    def test_a_part_never_repeats_its_pose_back_to_back(self):
+        # A part keyed to the pose it already holds is a change that changes
+        # nothing, which freezes it until its next event.
+        by_name = {a.name: a for a in LIMB}
+        last: dict[str, str] = {}
+        for e in self._events(40, seed=3):
+            for p in e.poses:
+                part = by_name[p.asset].part
+                assert last.get(part) != p.asset, part
+                last[part] = p.asset
+
+    def test_a_lane_without_limb_parts_draws_one_pose(self):
+        # The head has no arm to bundle with, so it stays one pose per event.
+        heads = [PoseAsset(name=f"H{i}", frame=1, group="head") for i in range(4)]
+        m = sample_pose_motion(heads, 5 * NS_PER_SECOND, seed=1, event_count=6, lanes=(("head",),))
+        assert all(len(e.poses) == 1 for e in m.events)
+
+
+class TestArmWeighting:
+    """The side raise is drawn less: it puts the hand outside the camera's view."""
+
+    ARMS = [
+        PoseAsset(name=f"Arm_left_x{x}_y{y}", frame=1, group="left", part="arm")
+        for x in (1, 2, 3, 4)
+        for y in (1, 2, 3)
+    ]
+
+    def test_weight_follows_the_name_token(self):
+        for name, want in (("Arm_left_x1_y2", 0.5), ("Arm_left_x2_y1", 1.5), ("Arm_left_x4_y3", 1.0)):
+            assert _draw_weight(PoseAsset(name, 1, "left", "arm")) == want
+
+    def test_only_arms_are_weighted(self):
+        # A wrist pose named x1 is a wrist angle, not the side raise.
+        assert _draw_weight(PoseAsset("Wrist_left_x1", 1, "left", "wrist")) == 1.0
+
+    def test_an_unknown_name_gets_the_default(self):
+        assert _draw_weight(PoseAsset("Arm_left_reach", 1, "left", "arm")) == 1.0
+
+    def test_x2_and_x3_are_drawn_more_than_x1(self):
+        seen = Counter()
+        for seed in range(80):
+            m = sample_pose_motion(self.ARMS, 5 * NS_PER_SECOND, seed=seed, event_count=10, lanes=(("left",),))
+            for e in m.events:
+                for p in e.poses:
+                    seen[p.asset.split("_")[2][:2]] += 1
+        assert seen["x2"] > seen["x1"]
+        assert seen["x3"] > seen["x1"]
+        # Three x-columns share each weight, so the ratio should track it.
+        assert seen["x2"] / seen["x1"] == pytest.approx(1.5 / 0.5, rel=0.25)
+
+
+class TestHeadKeepsPace:
+    def test_head_gets_as_many_events_as_each_hand(self):
+        # --hand N --head must move the head N times too, not fewer.
+        pool = LIMB + [PoseAsset(name=f"H{i}", frame=1, group="head") for i in range(6)]
+        lanes = (("left",), ("head",))
+        m = sample_pose_motion(pool, 5 * NS_PER_SECOND, seed=1, event_count=10, lanes=lanes)
+        assert sum(1 for e in m.events if e.group == "left") == 10
+        assert sum(1 for e in m.events if e.group == "head") == 10
+
+
+class TestHandSlot:
+    """The hand is set either by single fingers or by one whole-hand pose."""
+
+    WITH_HAND = LIMB + [PoseAsset(name=f"Fist{i}", frame=1, group="left", part="hand") for i in range(4)]
+
+    def _events(self, pool, n=10, seed=0):
+        m = sample_pose_motion(pool, 5 * NS_PER_SECOND, seed=seed, event_count=n, lanes=(("left",),))
+        return m.events
+
+    def _parts(self, pool, event):
+        by_name = {a.name: a for a in pool}
+        return [by_name[p.asset].part for p in event.poses]
+
+    def test_never_both_in_one_event(self):
+        # They fill the same slot: a whole-hand pose already sets every finger.
+        for seed in range(40):
+            for e in self._events(self.WITH_HAND, seed=seed):
+                parts = self._parts(self.WITH_HAND, e)
+                assert not ("hand" in parts and any(p.startswith("finger:") for p in parts))
+
+    def test_both_kinds_are_drawn_about_equally(self):
+        hands = fingers = 0
+        for seed in range(60):
+            for e in self._events(self.WITH_HAND, seed=seed):
+                parts = self._parts(self.WITH_HAND, e)
+                hands += "hand" in parts
+                fingers += any(p.startswith("finger:") for p in parts)
+        assert hands / (hands + fingers) == pytest.approx(HAND_POSE_SHARE, abs=0.06)
+
+    def test_a_library_without_whole_hand_poses_always_uses_fingers(self):
+        for e in self._events(LIMB, seed=1):
+            assert any(p.startswith("finger:") for p in self._parts(LIMB, e))
+
+    def test_a_library_with_only_whole_hand_poses_always_uses_them(self):
+        pool = [a for a in self.WITH_HAND if not a.part.startswith("finger:")]
+        for e in self._events(pool, seed=1):
+            assert "hand" in self._parts(pool, e)
+
+    def test_the_arm_is_still_always_set(self):
+        for seed in range(20):
+            for e in self._events(self.WITH_HAND, seed=seed):
+                assert "arm" in self._parts(self.WITH_HAND, e)

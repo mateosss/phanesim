@@ -57,5 +57,7 @@
   ],
   "frames": 21,
   "hdri": "../../hdri/modern_evening_street_2k.exr",
-  "accessories": []
+  "accessories": [],
+  "hdri_spin_deg": 0.0,
+  "hdri_spin_step_deg": 0.0
 }

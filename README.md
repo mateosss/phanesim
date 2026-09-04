@@ -308,7 +308,7 @@ uv run phanesim generate data/sequences/model1/sequence.json \
 uv run phanesim generate data/sequences/model1/sequence.json \
     --frames 81 --output output_folder --debug_kps
 
-# wear a watch and a ring
+# override what the sequence file says about accessories, just for this run
 uv run phanesim generate data/sequences/model1/sequence.json \
     --frames 81 --output output_folder --accessories watch1,ring1
 
@@ -354,12 +354,19 @@ your own before planning a long run.
 --accessories none             # bare hands
 ```
 
-Omit the option and the sequence file's own `accessories` list decides, which is
-empty unless it says otherwise. The `.blend`'s saved state is never inherited —
-`model1.blend` is saved with all four showing, and inheriting that silently put
-accessories into renders nobody asked for.
+The option is for trying something out. Normally you set `accessories` in the
+sequence file instead, so the render describes itself:
 
-`model2` carries none of the four, so its clips are always bare.
+```json
+"accessories": ["watch1", "ring1"]
+```
+
+The `.blend`'s saved state is never inherited — `model1.blend` is saved with all
+four showing, and inheriting that silently put accessories into renders nobody
+asked for. `model2` carries none of the four, so its clips are always bare.
+
+The background works the same way, except it has no command-line option at all:
+set `hdri_spin_step_deg` in the sequence file to turn it a little on every frame.
 
 #### Simple Camera movement
 
@@ -425,7 +432,6 @@ file and change the name yourself.
 ```json
 {
   "name": "model1",
-  "output_path": "model1",
   "body_rig": {
     "cameras":     [ "... resolution, lens, noise, distortion ..." ],
     "body":        { "model": "../../models/model1/model1.blend" },
@@ -433,7 +439,10 @@ file and change the name yourself.
   },
   "hand_motions": ["animation01.json"],
   "frames": 21,
-  "hdri": "../../hdri/brown_photostudio_02_2k.exr"
+  "hdri": "../../hdri/brown_photostudio_02_2k.exr",
+  "accessories": [],
+  "hdri_spin_deg": 0.0,
+  "hdri_spin_step_deg": 0.0
 }
 ```
 
@@ -481,17 +490,24 @@ sit in the same folder.
 
 #### The other fields
 
-- **`body.model`** — which model to use, relative to this file.
-- **`head_camera.rest_position`** — where the camera sits on the head. Measured
-  per model, and different for each one because the models are different heights.
-  `model1` uses `[0.0, -0.21, 1.715]`, `model2` uses `[0.0, -0.19, 1.564]`.
-- **`head_camera.rest_forward`** — where it looks. The camera is bolted to the
-  head like a real headset and never turns to follow the hands, so they move in
-  and out of view on their own. `[0.0, -1.0, -0.268]` points forward and 15
-  degrees down, at the space where the hands are.
-- **`frames`** — default frame count. `--frames` on the command line wins.
-- **`cameras`** — resolution, focal length, and the artifact settings (noise,
-  distortion, vignette).
+Every field below is set by editing the file. `generate` reads all of them, so a
+render needs no options beyond `--output`.
+
+| Field | What it does |
+|---|---|
+| `hand_motions` | Which animation to render. See above. |
+| `frames` | How many frames. `--frames` overrides it. |
+| `hdri` | The background and lighting, relative to this file. |
+| `accessories` | What the body wears: any of `ring1`, `ring2`, `watch1`, `band1`. Empty is bare hands. `--accessories` overrides it. |
+| `hdri_spin_deg` | Angle the background is turned on the first frame. |
+| `hdri_spin_step_deg` | Degrees added on each frame after, so every frame gets a different slice of the panorama and a different light direction. `0` holds it still. |
+| `body.model` | Which model, relative to this file. |
+| `cameras` | Resolution, focal length, and the artifact settings (noise, distortion, vignette). |
+| `head_camera.rest_position` | Where the camera sits on the head. Measured per model: `model1` `[0.0, -0.21, 1.715]`, `model2` `[0.0, -0.19, 1.564]`. |
+| `head_camera.rest_forward` | Where it looks. Bolted to the head like a real headset, never turning to follow the hands. `[0.0, -1.0, -0.268]` is forward and 15 degrees down, at the space where the hands are. |
+
+`plan-clips` writes all of these for you, one clip at a time — see
+[Making a dataset](#making-a-dataset--plan-clips-and-render-clips).
 
 After editing, check the file is still valid:
 
@@ -511,11 +527,11 @@ background, body, camera — and only the motion varies *within* one.
 ```bash
 # 1. Plan. Writes one directory per clip. No rendering, takes seconds.
 uv run phanesim plan-clips --template data/sequences/model1/sequence.json \
-    --output dataset --clips 60 --frames 10 --hand 6
+    --output dataset --clips 60
 
 # ...then the other body, numbering on from where the first left off.
 uv run phanesim plan-clips --template data/sequences/model2/sequence.json \
-    --output dataset --clips 40 --frames 10 --hand 6 --append
+    --output dataset --clips 40 --append
 
 # 2. Render. Interrupt it whenever; run it again to carry on.
 uv run phanesim render-clips dataset
@@ -529,10 +545,17 @@ clip, so 10 clips can come out 2:8 rather than 5:5.
 `--append` to add to it, or `--overwrite` to replace it — overwriting also
 invalidates any frames already rendered, so they get rendered again.
 
-**The head moves by default.** Each clip gets `--hand` poses for the left hand,
-`--hand` for the right and `--hand` for the head, all on separate timelines, so
-`--hand 8` is 24 events. The camera is anchored to the head bone, so this also
-moves the camera and changes the background. Pass `--no-head` to hold it still.
+**One event is a whole limb.** The pose library is split by joint — an asset
+moves the upper arm, or the forearm, or one finger — so an event draws one of
+each: arm, forearm, wrist, and then the hand, set either by one to five single
+fingers or by one whole-hand pose, half the time each. Every pose is blended in
+by its own amount. A single joint alone barely changes the picture; the arm
+accounts for about 78 px of hand movement against 10 px for all five fingers
+together.
+
+**The head moves by default**, on its own timeline with as many events as each
+hand. The camera is anchored to the head bone, so this also moves the camera and
+changes the background. Pass `--no-head` to hold it still.
 
 ```
 dataset/
@@ -567,6 +590,7 @@ dataset from looking finished. Use `--overwrite` to force everything.
 | background | picked from `data/hdri/` |
 | pose timeline | fresh draw, its seed stored in `animation.json` |
 | accessories | 50% bare, 30% one, 15% two, 5% three or four |
+| background angle | starts anywhere, then turns 25–45° per frame, enough to pass the whole panorama (`--no-spin` holds it) |
 | clip length | `--duration` is derived as `frames / 30`, i.e. 30 fps |
 | sensor noise | `noise_std` 0.05–0.40 |
 | vignette | `vignette_factor` 0.30–0.70 |
@@ -589,20 +613,13 @@ overlays: keypoints drawn onto the image would be learned as features.
 #### Choosing `--frames` and `--hand`
 
 They are separate knobs pulling opposite ways. `--frames` decides how densely
-the pose path is sampled; `--hand` decides how many poses are on it. Raising
-`--frames` alone samples the *same* path more finely, so frames get more alike.
+the pose path is sampled; `--hand` decides how many configurations are on it.
+Raising `--frames` alone samples the *same* path more finely, so frames get more
+alike.
 
-What matters is how many frames one pose change takes — aim for **1 to 2**:
-
-| | frames per pose change | movement between frames |
-|---|---|---|
-| `--frames 10 --hand 4` | 3.3 | 66 px |
-| **`--frames 10 --hand 6`** | **2.0** | 87 px |
-| `--frames 10 --hand 8` | 1.4 | 124 px |
-| `--frames 20 --hand 6` | 4.0 | 41 px |
-
-`--frames 10 --hand 6` is the default choice. `--duration` is derived from the
-frame count (30 fps) and does not affect the images.
+What matters is how many frames one change takes — aim for **1 to 2**. The
+default is `--frames 10 --hand 10`, one event per frame. `--duration` is derived
+from the frame count (30 fps) and does not affect the images.
 
 #### Splitting for training
 
@@ -654,17 +671,11 @@ carry **AGPL-3.0-only**. `model1.blend` is therefore a combined work under
 
 ### Environment maps
 
-All from Poly Haven, all **CC0-1.0** — no attribution required, credited here as
-a courtesy. Each provides both the lighting and the background of a render.
+The `.exr` files in `data/hdri/` come from
+[Poly Haven](https://polyhaven.com/hdris) and are all **CC0-1.0** — public
+domain, no attribution required. Each provides both the lighting and the
+background of a render.
 
-| Author | Files |
-|---|---|
-| Sergej Majboroda | `brown_photostudio_02`, `blue_photo_studio`, `christmas_photo_studio_01`, `small_empty_room_3`, `studio_garden` |
-| Grzegorz Wronkowski | `sunny_country_road`, `modern_evening_street` |
-| Greg Zaal | `rostock_laage_airport`, `cannon` |
-| Savva Zakharov | `newman_cafeteria` |
-| Jenelle van Heerden | `penguin_museum` |
-| Elvis Posa | `braustuble_alley` |
-
-All files are `_2k.exr`. Adding one means adding it to its author's list in
-`REUSE.toml`; `reuse lint` fails until it has an entry.
+Each file is still credited to its author in `REUSE.toml`, as a courtesy. A new
+one needs adding to that author's list there; `reuse lint` fails until it has an
+entry.

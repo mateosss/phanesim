@@ -22,11 +22,13 @@ from phanesim.clips import (
     ANIMATION_FILE,
     SEQUENCE_FILE,
     choose_accessories,
+    choose_hdri_spin,
     clip_dirs,
     next_clip_index,
     randomize_camera,
 )
 from phanesim.posemotion import (
+    BUNDLE_PARTS,
     DEFAULT_DURATION_SECONDS,
     DEFAULT_EVENT_COUNT,
     NS_PER_SECOND,
@@ -422,17 +424,19 @@ def generate(
     "event_count",
     default=None,
     type=int,
-    help=f"How many poses the clip contains, including the one at t=0. Each is drawn "
-    f"from the left-hand, right-hand and whole-body poses together, so one timeline "
-    f"covers them all.  [default: {DEFAULT_EVENT_COUNT}]",
+    help=f"How many events the clip contains, including the one at t=0. Each moves one "
+    f"side, drawn from the left-hand, right-hand and whole-body poses together, so one "
+    f"timeline covers them all.  [default: {DEFAULT_EVENT_COUNT}]",
 )
 @click.option(
     "--hand",
     default=None,
     type=int,
-    help="Give each hand its own timeline of this many poses, so the two move on "
-    "separate schedules and both are always posed. --hand 4 means 4 poses for the "
-    "left hand and 4 for the right. Cannot be used together with --events.",
+    help="Give each hand its own timeline of this many events, so the two move on "
+    "separate schedules. One event is a whole limb -- arm, forearm, wrist and then "
+    "either one to five fingers or one whole-hand pose -- each blended in by its own "
+    "amount, because a single joint alone barely changes the picture. Cannot be used "
+    "together with --events.",
 )
 @click.option(
     "--head",
@@ -528,7 +532,7 @@ def generate_motion(
     stocked = [lane for lane in lanes if any(counts[g] for g in lane)]
     for lane in stocked:
         drawn_from = "+".join(g for g in lane if counts[g])
-        click.echo(f"    timeline: {drawn_from:<18} {sum(counts[g] for g in lane):>3} pose(s)")
+        click.echo(f"    timeline: {drawn_from:<18} {sum(counts[g] for g in lane):>3} asset(s)")
     empty = [lane for lane in lanes if lane not in stocked]
     for lane in empty:
         click.echo(f"    no {'+'.join(lane)} poses in this model, so none are animated")
@@ -537,14 +541,41 @@ def generate_motion(
     if idle:
         click.echo(f"    not animated: {', '.join(f'{g} ({counts[g]})' for g in idle)}")
 
-    # Poses only ever key their own bones, so a left and a right pose are held at
-    # the same time whichever timeline drew them.  That is what makes the library
-    # multiply out instead of merely adding up.
-    combinations = 1
-    for group in ("left", "right", "head"):
-        if group in used and counts[group]:
-            combinations *= counts[group]
-    click.echo(f"[phanesim] {combinations} distinct pose combinations available.")
+    # Each part keys only its own bones, so one asset per part is held at once.
+    # Counting the product over the parts is what says how large the library
+    # really is; counting assets would say 68 where the answer is millions.
+    per_part: dict[tuple[str, str], int] = {}
+    for a in assets:
+        per_part[(a.group, a.part)] = per_part.get((a.group, a.part), 0) + 1
+    for group in sorted({g for g, _ in per_part} & used):
+        parts = {part: n for (g, part), n in per_part.items() if g == group}
+        limbs = {p: n for p, n in parts.items() if p in BUNDLE_PARTS}
+        fingers = {p: n for p, n in parts.items() if p.startswith("finger:")}
+        whole = parts.get("hand", 0)
+        drawn = {**limbs, **fingers, **({"hand": whole} if whole else {})}
+        if not drawn:
+            # No limb parts at all -- the head -- so every asset is drawn on its own.
+            drawn = parts
+
+        product = 1
+        for n in limbs.values():
+            product *= n
+        # The hand slot takes either the fingers or one whole-hand pose, never
+        # both, so those two add rather than multiply.
+        finger_space = 1
+        for n in fingers.values():
+            finger_space *= n
+        hand_slot = (finger_space if fingers else 0) + whole
+        if hand_slot:
+            product *= hand_slot
+        elif not limbs:
+            product = sum(parts.values())
+
+        click.echo(f"    {group:<6} " + ", ".join(f"{p}x{n}" for p, n in sorted(drawn.items())))
+        click.echo(f"    {'':6} -> {product:,} configurations")
+        idle = {p: n for p, n in parts.items() if p not in drawn}
+        if idle:
+            click.echo(f"    {'':6} not drawn: " + ", ".join(f"{p}x{n}" for p, n in sorted(idle.items())))
 
     # Drawn once per run rather than per file, so the whole run is reproducible
     # from the single number printed below.
@@ -567,7 +598,8 @@ def generate_motion(
         out_path = output_dir / f"{name}.json"
         motion.write(out_path)
         click.echo(f"  {out_path}")
-        click.echo(f"    {motion.event_count} poses over {duration:g} s  (seed={motion.seed})")
+        poses = sum(len(e.poses) for e in motion.events)
+        click.echo(f"    {motion.event_count} events, {poses} poses over {duration:g} s  (seed={motion.seed})")
         click.echo(motion.summary())
 
     click.echo(f"[phanesim] Wrote {count} animation description(s) to {output_dir}")
@@ -684,15 +716,23 @@ def preview(
     help="Directory the clip_NNNNN/ subdirectories are written to.",
 )
 @click.option("--clips", "clip_count", default=100, show_default=True, help="How many clips to plan.")
-@click.option("--frames", default=50, show_default=True, help="Frames rendered per clip.")
+@click.option("--frames", default=10, show_default=True, help="Frames rendered per clip.")
 @click.option(
     "--hand",
-    default=8,
+    default=10,
     show_default=True,
-    help="Poses per hand in each clip. Roughly frames/7 keeps consecutive frames "
-    "about 25 px apart; far below that they start to look alike.",
+    help="Events per hand in each clip; each sets the whole limb. Aim for one to two "
+    "frames per event, so roughly frames/6.",
 )
 @click.option("--head/--no-head", default=True, show_default=True, help="Also move the head.")
+@click.option(
+    "--spin/--no-spin",
+    default=True,
+    show_default=True,
+    help="Turn the background a little between frames, so each one sees a different "
+    "slice of the panorama lit from a different direction. It is a yaw, so the "
+    "horizon stays level. --no-spin holds it still.",
+)
 @click.option(
     "--append",
     is_flag=True,
@@ -728,6 +768,7 @@ def plan_clips(
     frames: int,
     hand: int,
     head: bool,
+    spin: bool,
     append: bool,
     overwrite: bool,
     seed: int | None,
@@ -832,6 +873,9 @@ def plan_clips(
         seq["body_rig"]["cameras"] = [randomize_camera(c, rng) for c in seq["body_rig"]["cameras"]]
         worn = choose_accessories(accessories_by_model[model], rng)
         seq["accessories"] = worn
+        start_deg, step_deg = choose_hdri_spin(rng) if spin else (0.0, 0.0)
+        seq["hdri_spin_deg"] = start_deg
+        seq["hdri_spin_step_deg"] = step_deg
         (clip_dir / SEQUENCE_FILE).write_text(json.dumps(seq, indent=2) + "\n")
 
         tally[Path(model).stem] = tally.get(Path(model).stem, 0) + 1

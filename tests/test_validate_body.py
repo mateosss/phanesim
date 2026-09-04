@@ -42,8 +42,8 @@ _POSE_MOTION = {
     "name": "animation01",
     "duration_ns": 8_000_000_000,
     "events": [
-        {"t_ns": 0, "asset": "Left_default"},
-        {"t_ns": 1_500_000_000, "asset": "hand_wave"},
+        {"t_ns": 0, "poses": [{"asset": "Arm_left_x1_y1", "alpha": 1.0}]},
+        {"t_ns": 1_500_000_000, "poses": [{"asset": "Arm_left_x2_y1", "alpha": 0.7}, {"asset": "Index_left_y1"}]},
     ],
 }
 
@@ -139,7 +139,7 @@ class TestPoseMotion:
         # timeline still carrying it is from the old format and should fail
         # loudly rather than be read with the field quietly ignored.
         for dead in ("kind", "duration_ns", "source_frames"):
-            data = {**_POSE_MOTION, "events": [{"t_ns": 0, "asset": "x", dead: 1}]}
+            data = {**_POSE_MOTION, "events": [{"t_ns": 0, "poses": [{"asset": "x"}], dead: 1}]}
             with pytest.raises(jsonschema.ValidationError):
                 validate_pose_motion(_write(tmp_path, "a.json", data))
 
@@ -153,7 +153,9 @@ class TestPoseMotion:
         # `generate-motion` and `generate`.
         from phanesim.posemotion import NS_PER_SECOND, PoseAsset, sample_pose_motion
 
-        assets = [PoseAsset(f"P{i}", 1, group="right") for i in range(4)] + [PoseAsset("L0", 1, group="left")]
+        assets = [PoseAsset(f"P{i}", 1, group="right", part="arm") for i in range(4)] + [
+            PoseAsset("L0", 1, group="left", part="arm")
+        ]
         motion = sample_pose_motion(assets, 30 * NS_PER_SECOND, seed=3)
         path = tmp_path / "generated.json"
         motion.write(path)

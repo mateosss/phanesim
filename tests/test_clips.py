@@ -17,8 +17,10 @@ from phanesim.clips import (
     CALIBRATED_DISTORTION,
     CALIBRATED_LENS_SCALE,
     CAMERA_RANGES,
+    HDRI_SPIN_STEP_DEG,
     SEQUENCE_FILE,
     choose_accessories,
+    choose_hdri_spin,
     clip_dirs,
     fingerprint,
     is_done,
@@ -254,3 +256,32 @@ class TestStrayClipDirs:
     def test_a_real_clip_is_not_a_stray(self, tmp_path):
         make_clip(tmp_path, "clip_00000")
         assert stray_clip_dirs(tmp_path) == []
+
+
+class TestChooseHdriSpin:
+    def _draws(self, n=5000, seed=0):
+        rng = random.Random(seed)
+        return [choose_hdri_spin(rng) for _ in range(n)]
+
+    def test_start_covers_the_whole_panorama(self):
+        # Turning about the vertical axis is a yaw, so every angle is upright and
+        # there is no reason to leave part of the panorama unreachable.
+        starts = [a for a, _ in self._draws()]
+        assert min(starts) < 5.0
+        assert max(starts) > 355.0
+        assert all(0.0 <= a <= 360.0 for a in starts)
+
+    def test_step_magnitude_stays_in_range(self):
+        lo, hi = HDRI_SPIN_STEP_DEG
+        assert all(lo <= abs(st) <= hi for _, st in self._draws())
+
+    def test_step_goes_both_ways(self):
+        signs = {st > 0 for _, st in self._draws(200)}
+        assert signs == {True, False}
+
+    def test_step_is_never_zero(self):
+        # A zero step would leave the whole clip on one background slice.
+        assert all(st != 0.0 for _, st in self._draws())
+
+    def test_same_seed_reproduces(self):
+        assert self._draws(20, seed=5) == self._draws(20, seed=5)

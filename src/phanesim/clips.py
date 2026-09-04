@@ -78,6 +78,30 @@ def choose_accessories(available: list[str], rng: random.Random) -> list[str]:
     return sorted(rng.sample(available, how_many))
 
 
+# How far the background turns per frame, in degrees; the sign is drawn too.
+# Nine steps at 40 degrees sweep a full circle, so this range takes most clips
+# past 360 and stops the half of the panorama behind the body from being skipped.
+# The lower bound keeps every frame's background genuinely different.
+HDRI_SPIN_STEP_DEG = (25.0, 45.0)
+
+
+def choose_hdri_spin(rng: random.Random) -> tuple[float, float]:
+    """Draw where the background starts and how far it turns each frame.
+
+    An HDRI is a full panorama but the camera only ever sees about a third of
+    it, and the body always faces the same way, so without this every clip using
+    one file looks at the same slice.  Turning it about the vertical axis is a
+    yaw -- the horizon stays level at any angle, including 180, which simply
+    faces the other side of the room.
+
+    Returns:
+        (starting angle, per-frame step), both in degrees.
+    """
+    lo, hi = HDRI_SPIN_STEP_DEG
+    step = rng.uniform(lo, hi) * rng.choice((-1.0, 1.0))
+    return round(rng.uniform(0.0, 360.0), 2), round(step, 2)
+
+
 def fixed_camera_fields() -> dict[str, str]:
     """Camera fields that must not be randomised, and the reason for each."""
     return {
