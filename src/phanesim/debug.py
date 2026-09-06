@@ -29,6 +29,7 @@ from __future__ import annotations
 import csv
 import json
 import math
+from collections.abc import Sequence
 from pathlib import Path
 
 from phanesim.skeleton import HAND_CONNECTIONS, LANDMARK_COLORS
@@ -136,7 +137,7 @@ def read_joints_2d(csv_path: Path) -> tuple[list[str], dict[str, list[list[Landm
 
 
 def hand_rect(
-    landmarks: list[Landmark],
+    landmarks: Sequence[Landmark],
     width: int,
     height: int,
     margin: float = DEFAULT_BOX_MARGIN,
