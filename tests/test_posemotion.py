@@ -18,7 +18,11 @@ from phanesim.posemotion import (
     PoseEvent,
     PoseMotion,
     PosePick,
+    _arm_tokens,
     _draw_weight,
+    _head_sees,
+    _seen_together,
+    _view_sees,
     sample_pose_motion,
 )
 
@@ -98,9 +102,11 @@ class TestSamplePoseMotion:
     @pytest.mark.parametrize("n", [1, 2, 6])
     def test_layered_library_yields_one_timeline_per_group(self, n):
         motion = sample_pose_motion(LAYERED, 20 * NS_PER_SECOND, seed=11, event_count=n, lanes=SPLIT_LANES)
-        assert motion.event_count == 3 * n
-        for group in ("left", "right", "head"):
+        for group in ("left", "right"):
             assert sum(1 for e in motion.events if e.group == group) == n
+        # The head is not on a count of its own: it is keyed off the hands, so it
+        # gets an event per hand move rather than per pair of them.
+        assert sum(1 for e in motion.events if e.group == "head") >= n
 
     def test_the_head_stays_still_unless_asked_for(self):
         # A frozen head is the default: the camera is bolted to it, so moving it
@@ -467,7 +473,7 @@ class TestArmWeighting:
     ]
 
     def test_weight_follows_the_name_token(self):
-        for name, want in (("Arm_left_x1_y2", 0.5), ("Arm_left_x2_y1", 1.5), ("Arm_left_x4_y3", 1.0)):
+        for name, want in (("Arm_left_x1_y2", 0.5), ("Arm_left_x2_y1", 1.5), ("Arm_left_x4_y3", 0.7)):
             assert _draw_weight(PoseAsset(name, 1, "left", "arm")) == want
 
     def test_only_arms_are_weighted(self):
@@ -491,13 +497,26 @@ class TestArmWeighting:
 
 
 class TestHeadKeepsPace:
-    def test_head_gets_as_many_events_as_each_hand(self):
-        # --hand N --head must move the head N times too, not fewer.
-        pool = LIMB + [PoseAsset(name=f"H{i}", frame=1, group="head") for i in range(6)]
-        lanes = (("left",), ("head",))
-        m = sample_pose_motion(pool, 5 * NS_PER_SECOND, seed=1, event_count=10, lanes=lanes)
+    POOL = LIMB + [PoseAsset(name=f"H{i}", frame=1, group="head") for i in range(6)]
+    LANES = (("left",), ("head",))
+
+    def test_head_moves_at_least_as_often_as_each_hand(self):
+        # --hand N --head must move the head at least N times, not fewer.
+        m = sample_pose_motion(self.POOL, 5 * NS_PER_SECOND, seed=1, event_count=10, lanes=self.LANES)
         assert sum(1 for e in m.events if e.group == "left") == 10
-        assert sum(1 for e in m.events if e.group == "head") == 10
+        assert sum(1 for e in m.events if e.group == "head") >= 10
+
+    def test_head_is_keyed_after_every_hand_move(self):
+        # The camera is bolted to the head, so a hand that moves while the head
+        # holds still can leave the frame and stay gone until the head next
+        # moves.  Keying the head off the hands is what stops that, and it only
+        # works if no hand move goes unanswered.
+        for seed in range(20):
+            m = sample_pose_motion(self.POOL, 5 * NS_PER_SECOND, seed=seed, event_count=8, lanes=self.LANES)
+            hands = sorted(e.t_ns for e in m.events if e.group == "left")
+            heads = sorted(e.t_ns for e in m.events if e.group == "head")
+            for moved, next_move in zip(hands, hands[1:], strict=False):
+                assert any(moved <= h <= next_move for h in heads), (moved, next_move, heads)
 
 
 class TestHandSlot:
@@ -542,3 +561,167 @@ class TestHandSlot:
         for seed in range(20):
             for e in self._events(self.WITH_HAND, seed=seed):
                 assert "arm" in self._parts(self.WITH_HAND, e)
+
+
+# A library named the way the real one is, so the tokens the head table and the
+# forearm gate read are actually there.  Two of each hand's arm heights and both
+# ends of the head's range are enough to tell the behaviours apart.
+def _named_library() -> list[PoseAsset]:
+    pool: list[PoseAsset] = []
+    for side in ("left", "right"):
+        for x in ("x1", "x2", "x3", "x4"):
+            for y in ("y1", "y2", "y3"):
+                pool.append(PoseAsset(f"Arm_{side}_{x}_{y}", 1, side, "arm"))
+        for r in ("r1", "r2", "r3"):
+            pool.append(PoseAsset(f"Forearm_{side}_{r}_b1", 1, side, "forearm"))
+        pool.append(PoseAsset(f"Forearm_{side}_up_b2", 1, side, "forearm"))
+        for w in ("x0", "r1", "r2"):
+            pool.append(PoseAsset(f"Wrist_{side}_{w}", 1, side, "wrist"))
+    for head in ("default", "lessleft", "lessright", "farleft", "farright", "farup", "moredown"):
+        pool.append(PoseAsset(f"Head_{head}", 1, "head", "other"))
+    return pool
+
+
+NAMED = _named_library()
+
+
+class TestForearmGate:
+    """Folding the forearm vertical only reads as a pose from a lowered arm."""
+
+    def _bundles(self, seeds=60):
+        for seed in range(seeds):
+            m = sample_pose_motion(NAMED, 5 * NS_PER_SECOND, seed=seed, event_count=8, lanes=(("left",),))
+            yield from m.events
+
+    def test_up_is_almost_always_paired_with_a_lowered_arm(self):
+        matched = mismatched = 0
+        for e in self._bundles():
+            picks = names(e)
+            if not any("_up_" in p for p in picks):
+                continue
+            arm = next(p for p in picks if p.startswith("Arm_"))
+            matched += arm.endswith("y3")
+            mismatched += not arm.endswith("y3")
+        assert matched > 0, "the up forearm should still be reachable"
+        assert mismatched / (matched + mismatched) < 0.10
+
+    def test_lowered_arms_still_reach_every_forearm(self):
+        # The gate must not turn y3 into "always up": it only stops the pairing
+        # that puts the hand above the view.
+        seen = {p for e in self._bundles() for p in names(e) if p.startswith("Forearm_")}
+        assert len(seen) == 4
+
+
+class TestHeadFollowsTheHands:
+    """The head is the camera, so it is drawn against where the hands are."""
+
+    LANES = (("left",), ("right",), ("head",))
+
+    def _motions(self, seeds=40):
+        for seed in range(seeds):
+            yield sample_pose_motion(NAMED, 5 * NS_PER_SECOND, seed=seed, event_count=8, lanes=self.LANES)
+
+    def test_mild_head_poses_dominate_the_extremes(self):
+        # Looking ahead or a little to one side is where a hand in front of the
+        # body is in frame at all; the extremes need the arm to match and so
+        # cannot carry a timeline.
+        drawn = Counter(p.asset for m in self._motions() for e in m.events if e.group == "head" for p in e.poses)
+        mild = sum(v for k, v in drawn.items() if k in {"Head_default", "Head_lessleft", "Head_lessright"})
+        assert mild / sum(drawn.values()) > 0.6
+
+    def test_every_head_pose_stays_reachable(self):
+        # Weighted, not filtered: a hand at the edge of the frame is exactly what
+        # a detector has to learn, and only the extremes produce one.
+        drawn = {p.asset for m in self._motions() for e in m.events if e.group == "head" for p in e.poses}
+        assert drawn == {a.name for a in NAMED if a.group == "head"}
+
+    def test_the_head_is_drawn_against_the_hands_not_alone(self):
+        # The point of the whole arrangement: which head pose comes up depends on
+        # where the arms went, so a library of arms that only ever sits at the
+        # side pulls the head round to it.
+        side_only = [a for a in NAMED if not a.name.startswith("Arm_") or "_x1_" in a.name]
+        turned = Counter()
+        for seed in range(40):
+            m = sample_pose_motion(side_only, 5 * NS_PER_SECOND, seed=seed, event_count=8, lanes=self.LANES)
+            turned.update(p.asset for e in m.events if e.group == "head" for p in e.poses)
+        far = turned["Head_farleft"] + turned["Head_farright"]
+        assert far / sum(turned.values()) > 0.3, turned
+
+
+class TestArmsAreDrawnTowardsEachOther:
+    """One head pose can only hold both hands when both are in its view."""
+
+    LANES = (("left",), ("right",), ("head",))
+
+    def _pairs(self, seeds=60):
+        """The (x, y) tokens each side holds at the start of every event."""
+        for seed in range(seeds):
+            m = sample_pose_motion(NAMED, 5 * NS_PER_SECOND, seed=seed, event_count=8, lanes=self.LANES)
+            held: dict[str, tuple[str, str]] = {}
+            for e in sorted(m.events, key=lambda e: e.t_ns):
+                if e.group not in ("left", "right"):
+                    continue
+                arm = next((p.asset for p in e.poses if p.asset.startswith("Arm_")), None)
+                tokens = _arm_tokens(arm) if arm else None
+                if tokens:
+                    held[e.group] = tokens
+                if len(held) == 2:
+                    yield held["left"], held["right"]
+
+    def test_both_arms_usually_land_where_one_head_pose_sees_them(self):
+        pairs = list(self._pairs())
+        together = sum(_seen_together("left", left, "right", right) for left, right in pairs)
+        assert together / len(pairs) > 0.5, together / len(pairs)
+
+    def test_the_two_arms_do_not_both_reach_across_the_body(self):
+        # They would pass through each other; the coupling must not seek it out.
+        crossing = [1 for left, right in self._pairs() if left[0] == "x4" and right[0] == "x4"]
+        assert len(crossing) / len(list(self._pairs())) < 0.05
+
+    def test_the_coupling_leaves_room_for_a_hand_on_its_own(self):
+        # Not every frame should be a two-hand frame: a detector trained only on
+        # those learns that hands come in pairs.
+        pairs = list(self._pairs())
+        apart = sum(not _seen_together("left", left, "right", right) for left, right in pairs)
+        assert apart / len(pairs) > 0.1
+
+
+class TestLoweredArmsFoldTheForearmUp:
+    """An arm hanging straight down puts the hand at the hip, out of every view."""
+
+    def _bundles(self, seeds=80):
+        for seed in range(seeds):
+            m = sample_pose_motion(NAMED, 5 * NS_PER_SECOND, seed=seed, event_count=8, lanes=(("left",),))
+            yield from m.events
+
+    def _by_height(self):
+        counts: dict[str, Counter] = {y: Counter() for y in ("y1", "y2", "y3")}
+        for e in self._bundles():
+            picks = names(e)
+            arm = next((p for p in picks if p.startswith("Arm_")), None)
+            tokens = _arm_tokens(arm) if arm else None
+            if tokens is None:
+                continue
+            counts[tokens[1]][any("_up_" in p for p in picks)] += 1
+        return counts
+
+    def test_a_lowered_arm_folds_up_about_half_the_time(self):
+        counts = self._by_height()["y3"]
+        share = counts[True] / (counts[True] + counts[False])
+        assert 0.3 < share < 0.7, share
+
+    def test_a_level_or_raised_arm_almost_never_does(self):
+        for y in ("y1", "y2"):
+            counts = self._by_height()[y]
+            assert counts[True] / (counts[True] + counts[False]) < 0.05
+
+
+class TestHeadViewKeys:
+    def test_a_tables_own_key_is_not_read_as_another_pose(self):
+        # _head_key strips a leading word, so "lean_left" read as an asset name
+        # becomes "left" -- a different entry with different rules.
+        assert _head_sees("Head_lean_left", "left", "x2", "y2")
+        assert not _head_sees("Head_lean_left", "left", "x1", "y2")
+        # The table's own keys must be looked up directly instead.
+        assert _view_sees("lean_left", "right", "x2", "y2")
+        assert not _view_sees("left", "right", "x2", "y2")  # a 40 deg turn loses the far hand

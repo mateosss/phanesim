@@ -18,6 +18,7 @@ import jsonschema
 from PIL import Image, ImageDraw
 
 import phanesim.validate as val
+from phanesim import visibility as vis
 from phanesim.clips import (
     ANIMATION_FILE,
     SEQUENCE_FILE,
@@ -273,6 +274,28 @@ _VALIDATE_FNS = {
 @click.group()
 def cli() -> None:
     """Phanesim command line interface."""
+
+
+@cli.command()
+@click.argument("dataset", type=click.Path(exists=True, path_type=Path))
+def visibility(dataset: Path) -> None:
+    """Report how many rendered frames actually show a hand.
+
+    Takes one render's output folder, one clip, or a whole planned dataset, and
+    reads the joints_2d.csv files already written under it. Renders nothing.
+
+      phanesim visibility dataset_test4
+      phanesim visibility output99w
+
+    Three thresholds are reported because the answer depends on which one is
+    meant: a hand clipped by the frame edge counts under the loosest and not
+    under the strictest, and that gap is usually where the surprise is.
+    """
+    try:
+        click.echo(vis.report(dataset))
+    except FileNotFoundError as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
 
 
 @cli.command()

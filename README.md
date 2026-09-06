@@ -290,12 +290,35 @@ uv run phanesim generate-motion --model data/models/model1/model1.blend \
     --output data/sequences/model1 --hand 4 --duration 1 --head
 ```
 
-`--head` adds the head on a timeline of its own, so it turns while the hands are
-changing pose — the two are independent and can change at the same moment. The
-camera is anchored to the head bone, so this moves the camera and changes the
+`--head` adds head movement, so the head turns while the hands are changing pose.
+The camera is anchored to the head bone, so this moves the camera and changes the
 background too. Without the flag the head stays still.
 
-It works with either `--events` or `--hand`, and adds that many head poses on top.
+It works with either `--events` or `--hand`.
+
+#### The head looks at the hands
+
+The head is not drawn independently of them. The camera is bolted to the head, so
+the head *is* where the camera points: a head that looks away from where the arms
+went produces a frame with no hand in it, however good the hand pose was. Drawn
+independently that happened about half the time.
+
+So the hands are drawn first and the head second, and each head pose is weighed by
+how many hands it would leave in frame across the stretch it is held. Two things
+follow from that:
+
+- **The head is keyed just after every hand move**, rather than on a schedule of
+  its own, so a hand never changes and then sits unseen until the head catches
+  up. It still moves at moments the hands do not.
+- **Which head pose comes up depends on where the arms are.** Looking ahead or a
+  little to one side carries most of the timeline, because that is where a hand
+  in front of the body is visible at all. The extremes — `Head_farleft`,
+  `Head_leftup` — stay reachable and come up when an arm is somewhere they can
+  see, which is what puts a hand at the edge of the frame for a detector to learn.
+
+The mapping from head pose to the arm positions it can see lives in `HEAD_VIEW` in
+`posemotion.py`. It is a plain table, tied to the current library's pose names, and
+it is the thing to edit if a pose is renamed or the framing changes.
 
 ### Step 2 — render
 
@@ -435,7 +458,7 @@ file and change the name yourself.
   "body_rig": {
     "cameras":     [ "... resolution, lens, noise, distortion ..." ],
     "body":        { "model": "../../models/model1/model1.blend" },
-    "head_camera": { "rest_position": [0.0, -0.21, 1.715] }
+    "head_camera": { "rest_position": [0.0, -0.181, 1.723] }
   },
   "hand_motions": ["animation01.json"],
   "frames": 21,
@@ -503,8 +526,8 @@ render needs no options beyond `--output`.
 | `hdri_spin_step_deg` | Degrees added on each frame after, so every frame gets a different slice of the panorama and a different light direction. `0` holds it still. |
 | `body.model` | Which model, relative to this file. |
 | `cameras` | Resolution, focal length, and the artifact settings (noise, distortion, vignette). |
-| `head_camera.rest_position` | Where the camera sits on the head. Measured per model: `model1` `[0.0, -0.21, 1.715]`, `model2` `[0.0, -0.19, 1.564]`. |
-| `head_camera.rest_forward` | Where it looks. Bolted to the head like a real headset, never turning to follow the hands. `[0.0, -1.0, -0.268]` is forward and 15 degrees down, at the space where the hands are. |
+| `head_camera.rest_position` | Where the camera sits on the head. Measured per model: `model1` `[0.0, -0.181, 1.723]`, `model2` `[0.0, -0.161, 1.572]`. It has to clear the nose — behind that line the camera renders the inside of the face — but as close to it as possible, because the hands work close to the body. |
+| `head_camera.rest_forward` | Where it looks. Bolted to the head like a real headset, never turning to follow the hands. `[0.0, -1.0, -0.601]` is forward and 31 degrees down, which is where the hands are: they work low and close, so a shallower angle leaves them along the bottom edge. `HEAD_VIEW` in `posemotion.py` is calibrated against this angle. |
 
 `plan-clips` writes all of these for you, one clip at a time — see
 [Making a dataset](#making-a-dataset--plan-clips-and-render-clips).
@@ -553,9 +576,31 @@ by its own amount. A single joint alone barely changes the picture; the arm
 accounts for about 78 px of hand movement against 10 px for all five fingers
 together.
 
-**The head moves by default**, on its own timeline with as many events as each
-hand. The camera is anchored to the head bone, so this also moves the camera and
-changes the background. Pass `--no-head` to hold it still.
+The joints are not drawn wholly independently of each other either: folding the
+forearm vertical (`Forearm_*_up_*`) is the raise-your-hand pose only from a
+lowered upper arm, and on a level or raised one it puts the hand above anything
+the camera sees, so that pairing is gated out. The two hands are also drawn to
+the same height about half the time, since one head pose can only hold both hands
+at once when they are in the same band.
+
+**The head moves by default**, keyed just after each hand move and drawn against
+where the arms are — see [The head looks at the hands](#the-head-looks-at-the-hands).
+The camera is anchored to the head bone, so this also moves the camera and changes
+the background. Pass `--no-head` to hold it still.
+
+**About 1 frame in 150 has no hand in it**, seven in ten have both, and the rest
+have one — about 1.7 hands per rendered frame, measured with a hand counted as
+present when 5 of its 21 landmarks are in frame. Counting only hands no frame edge
+has cut, it is 53% both and 7% none. `phanesim visibility <dataset>` reports all
+three thresholds.
+
+That is the result of aiming the camera at where the hands actually are rather
+than of the pose sampling alone; see
+[The head looks at the hands](#the-head-looks-at-the-hands) and
+`head_camera.rest_forward`. Two knobs move the balance: the zero entry of
+`HEAD_VIEW_WEIGHTS` raises or lowers the share of empty frames, and
+`ARM_COUPLE_SHARE` trades two-hand frames against one-hand ones. Both are in
+`posemotion.py`.
 
 ```
 dataset/
@@ -595,7 +640,7 @@ dataset from looking finished. Use `--overwrite` to force everything.
 | sensor noise | `noise_std` 0.05–0.40 |
 | vignette | `vignette_factor` 0.30–0.70 |
 | lens distortion | `distortion` 0.25–0.40, with `lens_scale` following it |
-| field of view | `fx` = `fy` 210–270, i.e. about 100°–113° |
+| field of view | `fx` = `fy` 168–216, i.e. about 112°–124° |
 
 Three things are deliberately **not** varied:
 
@@ -672,10 +717,12 @@ carry **AGPL-3.0-only**. `model1.blend` is therefore a combined work under
 ### Environment maps
 
 The `.exr` files in `data/hdri/` come from
-[Poly Haven](https://polyhaven.com/hdris) and are all **CC0-1.0** — public
-domain, no attribution required. Each provides both the lighting and the
-background of a render.
+[Poly Haven](https://polyhaven.com/hdris) and
+[ambientCG](https://ambientcg.com/list?type=HDRI). They are all **CC0-1.0** —
+public domain, no attribution required. Each provides both the lighting and
+the background of a render.
 
-Each file is still credited to its author in `REUSE.toml`, as a courtesy. A new
-one needs adding to that author's list there; `reuse lint` fails until it has an
-entry.
+Each file is still credited to its author in `REUSE.toml` when the source names
+one. ambientCG assets without a named individual use `NOASSERTION` and retain
+their source URLs. A new map needs an entry there; `reuse lint` fails until it
+has one.

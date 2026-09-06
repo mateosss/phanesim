@@ -55,7 +55,7 @@ def _head_camera_from_dict(data: dict) -> HeadCamera:
         rest_position=_vec("rest_position", None),
         # The body faces -Y in rest pose; the downward component aims at the
         # interaction volume, where the hands are.
-        rest_forward=_vec("rest_forward", [0.0, -1.0, -0.268]),
+        rest_forward=_vec("rest_forward", [0.0, -1.0, -0.601]),
     )
 
 

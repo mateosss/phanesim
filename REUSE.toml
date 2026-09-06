@@ -114,6 +114,83 @@ path = "data/hdri/artist_workshop_2k.exr"
 SPDX-FileCopyrightText = "Oliksiy Yakovlyev"
 SPDX-License-Identifier = "CC0-1.0"
 
+# Sources: https://ambientcg.com/a/IndoorEnvironmentHDRI001 through
+# https://ambientcg.com/a/IndoorEnvironmentHDRI023.  ambientCG does not state
+# individual copyright holders for these assets.
+[[annotations]]
+path = [
+    "data/hdri/indoor_01_2k.exr",
+    "data/hdri/indoor_02_2k.exr",
+    "data/hdri/indoor_03_2k.exr",
+    "data/hdri/indoor_04_2k.exr",
+    "data/hdri/indoor_05_2k.exr",
+    "data/hdri/indoor_06_2k.exr",
+    "data/hdri/indoor_07_2k.exr",
+    "data/hdri/indoor_08_2k.exr",
+    "data/hdri/indoor_09_2k.exr",
+    "data/hdri/indoor_10_2k.exr",
+    "data/hdri/indoor_11_2k.exr",
+    "data/hdri/indoor_12_2k.exr",
+    "data/hdri/indoor_13_2k.exr",
+    "data/hdri/indoor_14_2k.exr",
+    "data/hdri/indoor_15_2k.exr",
+    "data/hdri/indoor_16_2k.exr",
+    "data/hdri/indoor_17_2k.exr",
+    "data/hdri/indoor_18_2k.exr",
+    "data/hdri/indoor_19_2k.exr",
+    "data/hdri/indoor_20_2k.exr",
+    "data/hdri/indoor_21_2k.exr",
+    "data/hdri/indoor_22_2k.exr",
+    "data/hdri/indoor_23_2k.exr",
+]
+SPDX-FileCopyrightText = "NOASSERTION"
+SPDX-License-Identifier = "CC0-1.0"
+
+# Sources: https://ambientcg.com/a/EveningEnvironmentHDRI001 through
+# https://ambientcg.com/a/EveningEnvironmentHDRI005.  ambientCG does not state
+# individual copyright holders for these assets.
+[[annotations]]
+path = [
+    "data/hdri/evening_01_2k.exr",
+    "data/hdri/evening_02_2k.exr",
+    "data/hdri/evening_03_2k.exr",
+    "data/hdri/evening_04_2k.exr",
+    "data/hdri/evening_05_2k.exr",
+]
+SPDX-FileCopyrightText = "NOASSERTION"
+SPDX-License-Identifier = "CC0-1.0"
+
+# Source: https://ambientcg.com/a/NightEnvironmentHDRI010
+# ambientCG does not state an individual copyright holder for this asset.
+[[annotations]]
+path = "data/hdri/night_10_2k.exr"
+SPDX-FileCopyrightText = "NOASSERTION"
+SPDX-License-Identifier = "CC0-1.0"
+
+# Sources: https://ambientcg.com/a/DayEnvironmentHDRI001 through
+# https://ambientcg.com/a/DayEnvironmentHDRI015.  ambientCG does not state
+# individual copyright holders for these assets.
+[[annotations]]
+path = [
+    "data/hdri/day_01_2k.exr",
+    "data/hdri/day_02_2k.exr",
+    "data/hdri/day_03_2k.exr",
+    "data/hdri/day_04_2k.exr",
+    "data/hdri/day_05_2k.exr",
+    "data/hdri/day_06_2k.exr",
+    "data/hdri/day_07_2k.exr",
+    "data/hdri/day_08_2k.exr",
+    "data/hdri/day_09_2k.exr",
+    "data/hdri/day_10_2k.exr",
+    "data/hdri/day_11_2k.exr",
+    "data/hdri/day_12_2k.exr",
+    "data/hdri/day_13_2k.exr",
+    "data/hdri/day_14_2k.exr",
+    "data/hdri/day_15_2k.exr",
+]
+SPDX-FileCopyrightText = "NOASSERTION"
+SPDX-License-Identifier = "CC0-1.0"
+
 # Covers every sequence directory, including the generated animation
 # descriptions, so new sequences need no further annotation.
 [[annotations]]
