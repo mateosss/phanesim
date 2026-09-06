@@ -14,6 +14,8 @@ so a 180° rotation about X converts between them.
 
 Each camera writes <output_path>/cam_<name>/ holding frame_000000.png ... and
 joints_2d.csv, whose columns are timestamp then {hand}_{joint}_u/_v per landmark.
+The ground-truth extras -- joints_3d.csv and the detector's hand_rect.csv -- are
+written alongside them when asked for.
 A sequence listing several motions renders each as its own take into
 <output_path>/<motion name>/ instead.
 
@@ -33,6 +35,7 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 
 from phanesim.clips import SEQUENCE_FILE, clip_dirs, is_done, mark_done, stray_clip_dirs
+from phanesim.debug import write_hand_rects
 from phanesim.posemotion import NS_PER_SECOND, PoseAsset, PoseMotion
 from phanesim.rig import BodySequence
 from phanesim.skeleton import rigify_hand_landmarks
@@ -1091,6 +1094,7 @@ def render_body_sequence(
     output_path: Path,
     frames: int | None = None,
     write_3d: bool = False,
+    write_rects: bool = False,
     accessories: set[str] | None = None,
     camera_sweep: CameraSweep | None = None,
     rotate: float = 0.0,
@@ -1106,6 +1110,8 @@ def render_body_sequence(
         output_path: Root output directory for this sequence.
         frames:      Frames to render per motion, overriding seq.frames.
         write_3d:    Also write joints_3d.csv with world-space joint poses.
+        write_rects: Also write hand_rect.csv, the per-hand presence flag and
+                     bounding box a detector is trained against.
         accessories: Short names to wear, overriding the sequence.  None uses
                      the sequence's own list, which is empty unless it says
                      otherwise.
@@ -1121,6 +1127,7 @@ def render_body_sequence(
             take_path,
             frames if frames is not None else seq.frames,
             write_3d,
+            write_rects,
             accessories,
             camera_sweep,
             rotate,
@@ -1153,6 +1160,7 @@ def _render_body_take(
     output_path: Path,
     frames: int,
     write_3d: bool = False,
+    write_rects: bool = False,
     accessories: set[str] | None = None,
     camera_sweep: CameraSweep | None = None,
     rotate: float = 0.0,
@@ -1237,6 +1245,16 @@ def _render_body_take(
             writer.writerow(["timestamp"] + joint_columns)
             writer.writerows(joint_rows)
 
+        if write_rects:
+            # Derived from the CSV just written, not from joint_rows, so the
+            # boxes can only ever describe the numbers the dataset ships.  The
+            # resolution is passed in rather than sniffed from the frames:
+            # nothing is rendered yet, and Blender has no Pillow to read a PNG
+            # with anyway.
+            rect_path = write_hand_rects(cam_dir, resolution=camera.resolution)
+            if rect_path is not None:
+                print(f"[phanesim] Wrote {rect_path.name}: per-hand presence and bounding box.")
+
         if write_3d:
             csv_3d_path = cam_dir / "joints_3d.csv"
             with csv_3d_path.open("w", newline="") as csv_file:
@@ -1282,11 +1300,11 @@ def render_clips(dataset_dir: Path, overwrite: bool = False) -> None:
     for i, clip in enumerate(todo, 1):
         seq = BodySequence.from_path(clip / SEQUENCE_FILE)
         print(f"[phanesim] ({i}/{len(todo)}) {clip.name}")
-        # Accessories come from the clip's own sequence.json.  joints_3d costs
-        # nothing extra and is ground truth, so a dataset always gets it; the
-        # debug overlays are not written, since keypoints drawn onto the pixels
-        # would be learned as features.
-        render_body_sequence(seq, clip, write_3d=True)
+        # Accessories come from the clip's own sequence.json.  joints_3d and
+        # hand_rect cost nothing extra and are ground truth, so a dataset always
+        # gets them; the debug overlays are not written, since keypoints drawn
+        # onto the pixels would be learned as features.
+        render_body_sequence(seq, clip, write_3d=True, write_rects=True)
         mark_done(clip, seq.frames)
 
     print(f"[phanesim] Done: {len(todo)} clip(s) rendered, {done_already} skipped.")

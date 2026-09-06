@@ -3,9 +3,7 @@
 
 from __future__ import annotations
 
-import csv
 import json
-import math
 import os
 import random
 import subprocess
@@ -15,9 +13,9 @@ from pathlib import Path
 
 import click
 import jsonschema
-from PIL import Image, ImageDraw
 
 import phanesim.validate as val
+from phanesim import debug as dbg
 from phanesim import visibility as vis
 from phanesim.clips import (
     ANIMATION_FILE,
@@ -36,7 +34,6 @@ from phanesim.posemotion import (
     PoseAsset,
     sample_pose_motion,
 )
-from phanesim.skeleton import HAND_CONNECTIONS, LANDMARK_COLORS
 
 # Parent directory of the phanesim package, added to sys.path inside Blender
 # so that `import phanesim` works in the headless rendering subprocess.
@@ -176,71 +173,6 @@ def _find_blender(blender_bin: str | None) -> str:
     return "blender"
 
 
-def _overlay_keypoints(output_path: Path) -> None:
-    """Draw the 21-landmark skeleton on every rendered frame found under output_path.
-
-    Reads each cam_*/joints_2d.csv, loads the matching frame_XXXXXX.png files, draws
-    per-finger colored dots and skeleton lines, and saves frame_XXXXXX_debug.png.
-    """
-    _DOT_RADIUS = 3
-    _LINE_WIDTH = 1
-
-    for csv_path in sorted(output_path.rglob("joints_2d.csv")):
-        cam_dir = csv_path.parent
-        with csv_path.open(newline="") as f:
-            rows = list(csv.DictReader(f))
-        if not rows:
-            continue
-
-        # Column pairs: (u_col, v_col) for each of the 21 landmarks per hand.
-        headers = list(rows[0].keys())  # timestamp + u/v pairs
-        uv_pairs = [(headers[i], headers[i + 1]) for i in range(1, len(headers) - 1, 2)]
-
-        # uv_pairs has 21 pairs per hand; derive hand count from total columns.
-        n_hands = max(1, len(uv_pairs) // 21)
-
-        frame_paths = sorted(cam_dir.glob("frame_??????.png"))
-        written: list[str] = []
-        for frame_path, row in zip(frame_paths, rows, strict=False):
-            img = Image.open(frame_path).convert("RGB")
-            draw = ImageDraw.Draw(img)
-
-            for hand_idx in range(n_hands):
-                offset = hand_idx * 21
-                hand_uv: list[tuple[float, float] | None] = []
-
-                for k in range(21):
-                    u_col, v_col = uv_pairs[offset + k]
-                    try:
-                        u, v = float(row[u_col]), float(row[v_col])
-                        hand_uv.append(None if (math.isnan(u) or math.isnan(v)) else (u, v))
-                    except (ValueError, KeyError):
-                        hand_uv.append(None)
-
-                # Draw skeleton lines first (underneath dots).
-                for a, b in HAND_CONNECTIONS:
-                    pt_a, pt_b = hand_uv[a], hand_uv[b]
-                    if pt_a is not None and pt_b is not None:
-                        draw.line([pt_a, pt_b], fill=LANDMARK_COLORS[a], width=_LINE_WIDTH)
-
-                # Draw dots on top.
-                for k, pt in enumerate(hand_uv):
-                    if pt is None:
-                        continue
-                    u, v = pt
-                    r = _DOT_RADIUS
-                    draw.ellipse([u - r - 1, v - r - 1, u + r + 1, v + r + 1], fill=(0, 0, 0))
-                    draw.ellipse([u - r, v - r, u + r, v + r], fill=LANDMARK_COLORS[k])
-
-            debug_path = frame_path.with_stem(frame_path.stem + "_debug")
-            img.save(debug_path)
-            written.append(debug_path.name)
-
-        click.echo(f"[phanesim] Debug keypoints written to {cam_dir}:")
-        for name in written:
-            click.echo(f"  {name}")
-
-
 def _sys_path_setup() -> str:
     """Python snippet that makes `import phanesim` work inside Blender."""
     return f"import sys; sys.path.insert(0, {_PKG_PARENT!r}); "
@@ -296,6 +228,48 @@ def visibility(dataset: Path) -> None:
     except FileNotFoundError as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
+
+
+@cli.command()
+@click.argument("path", type=click.Path(exists=True, path_type=Path))
+@click.option(
+    "--overlay/--no-overlay",
+    default=False,
+    show_default=True,
+    help="Also draw the annotations onto copies of the frames, as "
+    "frame_XXXXXX_debug.png. Never do this inside a dataset you are going to "
+    "train on: the drawings sit in the same directory as the frames.",
+)
+@click.option(
+    "--margin",
+    default=dbg.DEFAULT_BOX_MARGIN,
+    show_default=True,
+    help="How far the box is grown past the landmark hull, as a fraction of the "
+    "hull's longer side, added to all four edges. The 21 landmarks are joint "
+    "centres, so a hull with no margin runs inside the hand.",
+)
+def annotate(path: Path, overlay: bool, margin: float) -> None:
+    """Derive hand_rect.csv from the joints_2d.csv files already under PATH.
+
+    Renders nothing: the bounding boxes come from landmarks that were written
+    when the frames were. Use it to add the detector's ground truth to a dataset
+    rendered before hand_rect.csv existed, or to redraw it with a different
+    --margin.
+
+    Takes one render's output folder, one clip, or a whole dataset.
+
+    \b
+      phanesim annotate dataset_test
+      phanesim annotate output99w --overlay
+    """
+    cam_dirs = dbg.annotate(path, overlay=overlay, margin=margin)
+    if not cam_dirs:
+        click.echo(f"Error: no {dbg.JOINTS_2D_FILE} under {path}", err=True)
+        sys.exit(1)
+    for cam_dir in cam_dirs:
+        click.echo(f"  {cam_dir / dbg.HAND_RECT_FILE}")
+    drawn = " and debug overlays" if overlay else ""
+    click.echo(f"[phanesim] Wrote {dbg.HAND_RECT_FILE}{drawn} for {len(cam_dirs)} camera(s).")
 
 
 @cli.command()
@@ -372,9 +346,11 @@ def validate(kind: str, input_path: Path) -> None:
     is_flag=True,
     default=False,
     help=(
-        "After rendering, overlay the projected 21-landmark hand skeleton on each frame "
-        "and save frame_XXXXXX_debug.png alongside the rendered images. Also writes "
-        "joints_3d.csv with the world-space position and rotation of every joint."
+        "Write the extra ground truth and draw it. hand_rect.csv gets the per-hand "
+        "presence flag and bounding box a detector trains on, joints_3d.csv the "
+        "world-space position and rotation of every joint, and frame_XXXXXX_debug.png "
+        "shows the skeleton and the boxes drawn over each rendered frame. The overlays "
+        "are for looking at, not for training: they are never written into a dataset."
     ),
 )
 def generate(
@@ -398,9 +374,10 @@ def generate(
     cls_name, fn_name = "BodySequence", "render_body_sequence"
     extra = f", frames={frames!r}" if frames is not None else ""
     if debug_kps:
-        # Ground-truth 3D joint poses are only worth the extra file when the
-        # debug pass is asked for; the data itself is already in hand.
-        extra += ", write_3d=True"
+        # The extra ground truth is only worth its files when the debug pass is
+        # asked for; both are derived from data already in hand.  A planned
+        # dataset gets them unconditionally instead -- see render_clips.
+        extra += ", write_3d=True, write_rects=True"
     extra += f", accessories={_parse_accessories(accessories)}, camera_sweep={_parse_camera(camera_sweep)}"
     extra += f", rotate={float(rotate)!r}"
     expr = (
@@ -416,7 +393,10 @@ def generate(
     if returncode != 0:
         sys.exit(returncode)
     if debug_kps:
-        _overlay_keypoints(output_path)
+        # The boxes are already on disk, written by the render itself; this
+        # only draws them, which needs Pillow and so has to happen out here.
+        for cam_dir in dbg.annotate(output_path):
+            click.echo(f"[phanesim] Debug overlays and {dbg.HAND_RECT_FILE} written to {cam_dir}")
     sys.exit(0)
 
 

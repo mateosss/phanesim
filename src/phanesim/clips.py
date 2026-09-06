@@ -45,14 +45,17 @@ CAMERA_RANGES: dict[str, tuple[float, float]] = {
     # fitted forward map drifts from Blender's own, which would silently put the
     # 2D ground truth in the wrong place.
     "distortion": (0.25, 0.40),
-    # Focal length in pixels, i.e. field of view: 168 to 216 spans about 112 to
-    # 124 degrees horizontally on a 640-wide sensor.  Widened twice from the
-    # original 210-270 (100 to 113 degrees), because the hands work close to the
-    # camera and a narrower lens loses them off the edge: re-projecting one
-    # dataset's recorded 3D landmarks through the wider lens took the frames
-    # holding no hand from 21% to 10%.  A headset's tracking cameras are wider
-    # than this again, and the gain flattens out past here.
-    "fx": (168.0, 216.0),
+    # Focal length in pixels, i.e. field of view: 210 to 270 spans about 100 to
+    # 113 degrees horizontally on a 640-wide sensor.
+    #
+    # This was widened to 168-216 while the hands were being lost off the edge of
+    # the frame, and brought back once the camera's aim was fixed instead -- the
+    # hands sit low and close, and pointing at them (see head_camera.rest_forward)
+    # did what a wider lens had been standing in for.  Re-projecting a rendered
+    # dataset through each: at 240 the frames holding no hand are 4%, against 1%
+    # at 192, and the median hand is 132 px across instead of 113.  The narrower
+    # lens is worth those three points for the pixels on the hand.
+    "fx": (180.0, 270.0),
 }
 
 

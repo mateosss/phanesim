@@ -191,6 +191,29 @@ path = [
 SPDX-FileCopyrightText = "NOASSERTION"
 SPDX-License-Identifier = "CC0-1.0"
 
+# Environment maps from Open HDRI's Indoor and Urban collections:
+# https://openhdri.org/c/indoor and https://openhdri.org/c/urban
+[[annotations]]
+path = [
+    "data/hdri/big_studio_01_2k.exr",
+    "data/hdri/brick_wall_alley_2k.exr",
+    "data/hdri/chapel_interior_2k.exr",
+    "data/hdri/fly_studio_01_2k.exr",
+    "data/hdri/historic_flour_mill_2k.exr",
+    "data/hdri/jugow_glowna_overcast_2k.exr",
+    "data/hdri/jugow_jana_overcast_2k.exr",
+    "data/hdri/overcast_frozen_river_2k.exr",
+    "data/hdri/polanica_bandshell_morning_2k.exr",
+    "data/hdri/polanica_fountain_square_2k.exr",
+    "data/hdri/polanica_fountain_terrace_2k.exr",
+    "data/hdri/rubinkowo_sandbox_overcast_2k.exr",
+    "data/hdri/studio_2nd_floor_2k.exr",
+    "data/hdri/sunlit_castle_fountain_2k.exr",
+    "data/hdri/zum_bergkeller_ruins_2k.exr",
+]
+SPDX-FileCopyrightText = "Grzegorz Wronkowski"
+SPDX-License-Identifier = "CC0-1.0"
+
 # Covers every sequence directory, including the generated animation
 # descriptions, so new sequences need no further annotation.
 [[annotations]]

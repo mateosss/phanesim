@@ -93,7 +93,9 @@ _HEAD_VIEW_RAW: dict[str, dict[str, tuple[str, str]]] = {
     # the steeper camera, y3 comes to 0.58-0.72 and x1 to 0.62-0.77, which is the
     # same band as the rest -- the hands sit low and close, so pointing at them
     # brings nearly the whole reach into view.  Retune this row if that aim moves
-    # again; the two are not independent.
+    # again; the two are not independent.  Re-checked after the lens was narrowed
+    # back to fx 240: every cell here drops a little (x2 to 0.86/0.85/0.67) but
+    # none falls out, so the row stands at either focal length.
     #
     # Only the two frontal reaches are listed even though x1 and x4 measure not
     # far behind them (0.62-0.81 against 0.58-0.88).  The table is read as a

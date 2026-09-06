@@ -176,7 +176,7 @@ class Project:
 
 ## CLI
 
-Four commands:
+The commands:
 
 | Command | What it does |
 |---|---|
@@ -185,6 +185,8 @@ Four commands:
 | `preview` | Builds the animation into a `.blend` you can open in Blender. Renders nothing. |
 | `plan-clips` | Plans a whole dataset: one directory per clip. Renders nothing. |
 | `render-clips` | Renders a planned dataset. Safe to interrupt and re-run. |
+| `annotate` | Derives `hand_rect.csv` from `joints_2d.csv` files already on disk. Renders nothing. |
+| `visibility` | Reports how many rendered frames actually show a hand. Renders nothing. |
 | `validate` | Checks that a JSON file matches its schema. |
 
 The models live in `data/models/model1/` and `data/models/model2/`. Each is a
@@ -327,7 +329,7 @@ it is the thing to edit if a pose is renamed or the framing changes.
 uv run phanesim generate data/sequences/model1/sequence.json \
     --frames 81 --output output_folder
 
-# add the keypoint overlay to check the ground truth visually
+# write the extra ground truth and draw it, to check it visually
 uv run phanesim generate data/sequences/model1/sequence.json \
     --frames 81 --output output_folder --debug_kps
 
@@ -349,10 +351,13 @@ This writes to `output_folder/cam_<name>/`:
 
 - `frame_000000.png`, `frame_000001.png`, … the rendered images
 - `joints_2d.csv` — the 21 hand landmarks per hand, in pixels, for every frame
-- `frame_000000_debug.png`, … only with `--debug_kps`: the same images with the
-  skeleton drawn on top
+- `hand_rect.csv` — only with `--debug_kps`: per hand, whether it is in the
+  picture and the bounding box it occupies. See
+  [Hand bounding boxes](#hand-bounding-boxes--hand_rectcsv).
 - `joints_3d.csv` — only with `--debug_kps`: the same 21 landmarks per hand in
   world space, as position `x, y, z` plus rotation `qx, qy, qz, qw`
+- `frame_000000_debug.png`, … only with `--debug_kps`: the same images with the
+  skeleton and the bounding boxes drawn on top
 
 `--frames N` renders N frames spread evenly across the whole motion, so
 `--frames 2` gives the first and last frame, and any number still covers the
@@ -431,6 +436,41 @@ once at `90`.
 
 `0`, `90`, `180` and `270` are accepted. The keypoints in `joints_2d.csv` rotate
 with the image, so the annotations stay correct.
+
+#### Hand bounding boxes — `hand_rect.csv`
+
+Detection and keypoint estimation are two stages: first find whether there is a
+hand and where its box is, then run keypoints on the crop. `hand_rect.csv` is
+the ground truth for the first stage — one row per frame:
+
+```
+timestamp, left_present, left_x, left_y, left_w, left_h,
+           right_present, right_x, right_y, right_w, right_h
+```
+
+`x, y` is the top-left corner and `w, h` the size, in pixels. An absent hand is
+`present=0` and four `nan`s, so a script that ignores the flag fails loudly
+instead of training on a box in the corner.
+
+The box is an upright rectangle even though the lens distortion curves the
+hand's real outline, because that is what a detector predicts. A hand counts as
+present once 5 of its 21 landmarks are inside the image, so one sliced by the
+frame edge is kept and its box clipped rather than dropped. The box is grown
+past the landmark hull by 12% of the hull's longer side on all four edges, since
+the landmarks are joint centres and the hull runs inside the hand. All three are
+`debug.py` constants; the margin is also `phanesim annotate --margin`.
+
+Nothing is re-rendered to produce it — it comes from `joints_2d.csv`, so
+`phanesim annotate` adds it to a dataset rendered before it existed:
+
+```bash
+uv run phanesim annotate dataset                   # every clip under it
+uv run phanesim annotate output_folder --overlay   # and draw it
+```
+
+`--debug_kps` draws the boxes alongside the skeleton, cyan for the left hand and
+yellow for the right, read back out of `hand_rect.csv` so the picture can only
+show what the file says.
 
 ### Preview — look at it in Blender
 
@@ -558,6 +598,9 @@ uv run phanesim plan-clips --template data/sequences/model2/sequence.json \
 
 # 2. Render. Interrupt it whenever; run it again to carry on.
 uv run phanesim render-clips dataset
+
+# 3. Check if hands are visible in the datset
+uv ruyn phanesim visibility dataset
 ```
 
 Planning each body separately is how you control the mix. Passing two
@@ -588,11 +631,12 @@ where the arms are — see [The head looks at the hands](#the-head-looks-at-the-
 The camera is anchored to the head bone, so this also moves the camera and changes
 the background. Pass `--no-head` to hold it still.
 
-**About 1 frame in 150 has no hand in it**, seven in ten have both, and the rest
-have one — about 1.7 hands per rendered frame, measured with a hand counted as
-present when 5 of its 21 landmarks are in frame. Counting only hands no frame edge
-has cut, it is 53% both and 7% none. `phanesim visibility <dataset>` reports all
-three thresholds.
+**About 1 frame in 25 has no hand in it**, two thirds have both, and the rest
+have one — about 1.6 hands per rendered frame, with a hand counted as present when
+5 of its 21 landmarks are in frame. Counting only hands no frame edge has cut, it
+is 41% both and 17% none. Run `phanesim visibility <dataset>` on a render to
+measure it; it reports all three thresholds, and they disagree enough that one
+number on its own is misleading.
 
 That is the result of aiming the camera at where the hands actually are rather
 than of the pose sampling alone; see
@@ -611,6 +655,7 @@ dataset/
       frame_000000.png ... frame_000049.png
       joints_2d.csv
       joints_3d.csv
+      hand_rect.csv
     _done.json        # written last: "these frames match these settings"
   clip_00001/
   ...
@@ -640,7 +685,7 @@ dataset from looking finished. Use `--overwrite` to force everything.
 | sensor noise | `noise_std` 0.05–0.40 |
 | vignette | `vignette_factor` 0.30–0.70 |
 | lens distortion | `distortion` 0.25–0.40, with `lens_scale` following it |
-| field of view | `fx` = `fy` 168–216, i.e. about 112°–124° |
+| field of view | `fx` = `fy` 210–270, i.e. about 100°–113° |
 
 Three things are deliberately **not** varied:
 
@@ -652,8 +697,10 @@ Three things are deliberately **not** varied:
   and checked against Blender up to about 0.4. Past that the 2D keypoints would
   drift away from the pixels, silently.
 
-`render-clips` always writes `joints_3d.csv` and never writes the `_debug.png`
-overlays: keypoints drawn onto the image would be learned as features.
+`render-clips` always writes `joints_3d.csv` and `hand_rect.csv`, and never
+writes the `_debug.png` overlays: keypoints drawn onto the image would be
+learned as features. Every CSV is ground truth and belongs in the dataset; the
+drawings are only ever a way of looking at it.
 
 #### Choosing `--frames` and `--hand`
 
@@ -718,11 +765,12 @@ carry **AGPL-3.0-only**. `model1.blend` is therefore a combined work under
 
 The `.exr` files in `data/hdri/` come from
 [Poly Haven](https://polyhaven.com/hdris) and
-[ambientCG](https://ambientcg.com/list?type=HDRI). They are all **CC0-1.0** —
-public domain, no attribution required. Each provides both the lighting and
-the background of a render.
+[ambientCG](https://ambientcg.com/list?type=HDRI), and
+[Open HDRI](https://openhdri.org/). They are all **CC0-1.0** — public domain,
+no attribution required. Each provides both the lighting and the background of
+a render.
 
 Each file is still credited to its author in `REUSE.toml` when the source names
-one. ambientCG assets without a named individual use `NOASSERTION` and retain
-their source URLs. A new map needs an entry there; `reuse lint` fails until it
-has one.
+one. Open HDRI assets are credited to Grzegorz Wronkowski; ambientCG assets
+without a named individual use `NOASSERTION` and retain their source URLs. A
+new map needs an entry there; `reuse lint` fails until it has one.

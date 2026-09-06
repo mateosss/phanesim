@@ -7,8 +7,8 @@
         "intrinsics": {
           "name": "pinhole",
           "parameters": {
-            "fx": 192.0,
-            "fy": 192.0,
+            "fx": 240.0,
+            "fy": 240.0,
             "cx": 320.0,
             "cy": 240.0
           }
