@@ -44,13 +44,6 @@ SIDES: tuple[str, ...] = ("left", "right")
 
 LANDMARKS_PER_HAND = 21
 
-# How many of the 21 landmarks must be inside the image before the hand counts
-# as present.  5 is visibility.py's loosest threshold, "what a detector can
-# still draw a box around": a hand sliced by the frame edge is something the
-# detector has to find, so it is labelled present and its box clipped to the
-# image rather than dropped.
-PRESENCE_MIN_LANDMARKS = 5
-
 # How far the box is grown past the landmark hull, as a fraction of the hull's
 # *longer* side, added equally to all four edges.  The 21 landmarks are joint
 # centres, so their hull runs *inside* the hand: the palm's outer edge and the
@@ -146,24 +139,40 @@ def hand_rect(
 
     The hull is taken over every landmark that has pixel coordinates at all,
     including ones off the edge, because those still say how far the hand
-    reaches; the box is only clipped to the image at the end.  Presence is
-    decided separately, by how many landmarks actually land inside the frame.
+    reaches; it is grown by the margin, and only then clipped to the image.
+
+    Presence falls out of that geometry: the hand is in shot when the grown box
+    still has area after clipping.  It is deliberately not a count of landmarks
+    inside the frame, which is the test this used to apply and which dropped
+    hands the picture plainly showed -- a hand entering at a corner puts a
+    couple of fingertips in frame and its remaining joints outside, so any
+    threshold above about two threw away a box a detector has to predict.  On
+    dataset_test1 and dataset_test2 that was 29 of 280 hand-frames.  Counting
+    landmarks is still the right question for "how much hand does this render
+    show", and visibility.py goes on asking it.
+
+    The margin is applied before the clip, so it can bring a hand just off the
+    edge into shot.  That is intended: the box is the annotation, and if the
+    annotation overlaps the image the hand is in the picture.  It does mean
+    *margin* moves the present flag a little and not only the box size.
 
     Args:
         landmarks: The 21 landmarks of one hand, None where unprojectable.
+            NaN in joints_2d.csv, and so None here, already covers the two ways
+            a landmark can be nowhere: behind the camera, or past the fold of
+            the lens distortion.  So no landmark that reaches this function is
+            reporting a position it does not really have, and the hull cannot
+            be dragged somewhere absurd by one.
         width, height: Image size in pixels.
         margin: Fraction of the hull's longer side to grow by, on all four
             sides.  See DEFAULT_BOX_MARGIN for why it is not per-axis.
 
     Returns:
         (x, y, w, h) with x, y the top-left corner, clipped to the image, or
-        None when too little of the hand is in frame to be worth a box.
+        None when the box and the image do not overlap in any area.
     """
     seen = [p for p in landmarks if p is not None]
     if not seen:
-        return None
-    inside = sum(1 for u, v in seen if 0 <= u < width and 0 <= v < height)
-    if inside < PRESENCE_MIN_LANDMARKS:
         return None
 
     us = [u for u, _ in seen]

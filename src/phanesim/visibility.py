@@ -32,9 +32,15 @@ import pandas as pd
 LANDMARKS_PER_HAND = 21
 
 # The thresholds reported, as (label, how many of the 21 landmarks must be in
-# frame).  "any" is what a detector can still draw a box around, "half" is a hand
-# a person would call visible, and "whole" is one no frame edge has cut.
-THRESHOLDS: tuple[tuple[str, int], ...] = (("any", 5), ("half", 11), ("whole", 21))
+# frame).  "partial" is a hand the frame edge has cut but that is still there to
+# be seen, "half" is a hand a person would call visible, and "whole" is one no
+# frame edge has cut.
+#
+# These count landmarks because that is the question this module asks: what share
+# of the frames a render put a hand in.  It is not the rule behind the present
+# flag in hand_rect.csv, which is a geometric test on the box -- see
+# debug.hand_rect.
+THRESHOLDS: tuple[tuple[str, int], ...] = (("partial", 5), ("half", 11), ("whole", 21))
 
 DEFAULT_RESOLUTION = (640, 480)
 

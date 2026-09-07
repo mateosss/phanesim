@@ -13,7 +13,6 @@ from phanesim.debug import (
     DEFAULT_BOX_MARGIN,
     HAND_RECT_FILE,
     LANDMARKS_PER_HAND,
-    PRESENCE_MIN_LANDMARKS,
     SIDES,
     hand_rect,
     hand_rect_columns,
@@ -101,17 +100,54 @@ class TestClippedToTheImage:
 
 
 class TestPresence:
-    def test_a_hand_with_too_few_landmarks_in_frame_is_absent(self):
-        in_frame = PRESENCE_MIN_LANDMARKS - 1
-        points = hand(in_view(in_frame) + [(5000, 200)] * (LANDMARKS_PER_HAND - in_frame))
-        assert hand_rect(points, 640, 480, margin=0.0) is None
+    """Presence is the box overlapping the image, not a count of landmarks.
 
-    def test_the_threshold_itself_counts_as_present(self):
-        points = hand(in_view(PRESENCE_MIN_LANDMARKS) + [(5000, 200)] * 16)
-        assert hand_rect(points, 640, 480, margin=0.0) is not None
+    Counting landmarks is what this used to do, and it dropped hands the frame
+    plainly showed: a hand entering at a corner has a couple of fingertips in
+    shot and every other joint outside it.
+    """
+
+    def test_a_hand_cut_down_to_a_few_joints_by_the_frame_edge_is_present(self):
+        # 1 to 4 joints in frame and the rest off the right edge.  The old
+        # 5-landmark rule called every one of these absent.
+        for in_frame in range(1, 5):
+            points = hand(in_view(in_frame) + [(5000, 200)] * (LANDMARKS_PER_HAND - in_frame))
+            assert hand_rect(points, 640, 480, margin=0.0) is not None, in_frame
+
+    def test_a_hand_straddling_a_corner_with_no_joint_in_frame_is_present(self):
+        # One joint off the left edge, one off the top, so neither is inside the
+        # image -- but the hull between them crosses it, and that is the box.
+        points = hand([(-50.0, 200.0), (100.0, -30.0)])
+        assert hand_rect(points, 640, 480, margin=0.0) == (0.0, 0.0, 100.0, 200.0)
+
+    def test_the_margin_can_bring_a_hand_just_off_the_edge_into_shot(self):
+        # Deliberate: the box is the annotation, so an annotation overlapping
+        # the image means the hand is in the picture.  It does mean the margin
+        # moves the present flag and not only the box size.
+        points = square(-100, 100, -10, 300)
+        assert hand_rect(points, 640, 480, margin=0.0) is None
+        assert hand_rect(points, 640, 480, margin=DEFAULT_BOX_MARGIN) is not None
+
+    def test_a_hand_whose_box_clears_the_image_entirely_is_absent(self):
+        # Far enough out that even the grown box misses.
+        assert hand_rect(square(2000, 100, 2200, 300), 640, 480, margin=DEFAULT_BOX_MARGIN) is None
+
+    def test_a_hand_only_touching_the_border_is_absent(self):
+        # The hull starts exactly on the right edge, so the intersection is a
+        # line: no area, nothing to train or score against.
+        assert hand_rect(square(640, 100, 800, 300), 640, 480, margin=0.0) is None
 
     def test_a_hand_with_no_landmarks_at_all_is_absent(self):
         assert hand_rect(hand([]), 640, 480, margin=0.0) is None
+
+    def test_the_box_never_leaves_the_image(self):
+        # Every direction a hand can spill, with the margin pushing it further.
+        hulls = ((-200, -200, 300, 300), (400, 300, 900, 800), (-50, 100, 700, 200), (100, -50, 200, 600))
+        for hull in hulls:
+            box = hand_rect(square(*hull), 640, 480, margin=DEFAULT_BOX_MARGIN)
+            assert box is not None, hull
+            x, y, w, h = box
+            assert 0.0 <= x and 0.0 <= y and x + w <= 640.0 and y + h <= 480.0, hull
 
 
 class TestHandRectCsv:

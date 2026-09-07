@@ -453,12 +453,28 @@ timestamp, left_present, left_x, left_y, left_w, left_h,
 instead of training on a box in the corner.
 
 The box is an upright rectangle even though the lens distortion curves the
-hand's real outline, because that is what a detector predicts. A hand counts as
-present once 5 of its 21 landmarks are inside the image, so one sliced by the
-frame edge is kept and its box clipped rather than dropped. The box is grown
-past the landmark hull by 12% of the hull's longer side on all four edges, since
-the landmarks are joint centres and the hull runs inside the hand. All three are
-`debug.py` constants; the margin is also `phanesim annotate --margin`.
+hand's real outline, because that is what a detector predicts. It is grown past
+the landmark hull by 12% of the hull's longer side on all four edges, since the
+landmarks are joint centres and the hull runs inside the hand, and then clipped
+to the image. The margin is a `debug.py` constant and also
+`phanesim annotate --margin`.
+
+**A hand is present when that box still has area after the clip** — nothing
+counts landmarks. A hand entering at the edge of the frame puts a couple of
+fingertips in shot and leaves its other joints outside, so the landmark count
+this used to test (5 of 21) threw away boxes that were plainly in the picture:
+on `dataset_test1` and `dataset_test2` together, 29 of 280 hand-frames. Counting
+landmarks is still the right question for *how much* hand a render shows, and
+`phanesim visibility` goes on asking it — but it is not the same question as
+whether there is something to draw a box around.
+
+Two consequences worth knowing. The margin is applied before the clip, so it can
+pull a hand just off the edge into shot; that is intended — the box is the
+annotation, and an annotation overlapping the image means the hand is in the
+picture — but it does mean `--margin` moves the present flag a little and not
+only the box size. And a hand barely entering the frame gets a correspondingly
+thin box (down to about 7 px on those datasets) rather than being dropped, which
+is what it looks like to a detector.
 
 Nothing is re-rendered to produce it — it comes from `joints_2d.csv`, so
 `phanesim annotate` adds it to a dataset rendered before it existed:

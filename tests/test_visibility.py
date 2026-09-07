@@ -77,12 +77,12 @@ class TestOutOfFrameIsNotNaN:
         # pixel coordinates, and counting non-NaN as visible would call it seen.
         write_clip(tmp_path, [{"right": hand(u=5000.0), "left": hand(u=-900.0)}])
         tallies, _ = measure(tmp_path)
-        assert tallies["any"].share(0) == 1.0
+        assert tallies["partial"].share(0) == 1.0
 
     def test_nan_landmarks_are_counted_out_too(self, tmp_path):
         write_clip(tmp_path, [{"right": hand(n=0), "left": hand(n=0)}])
         tallies, _ = measure(tmp_path)
-        assert tallies["any"].share(0) == 1.0
+        assert tallies["partial"].share(0) == 1.0
 
     def test_a_hand_inside_the_image_is_counted_in(self, tmp_path):
         write_clip(tmp_path, [{"right": hand(), "left": hand()}])
@@ -98,7 +98,7 @@ class TestThresholdsDisagree:
         clipped = hand(n=6)[:6] + [(5000.0, 100.0)] * (LANDMARKS_PER_HAND - 6)
         write_clip(tmp_path, [{"right": clipped, "left": hand(n=0)}])
         tallies, _ = measure(tmp_path)
-        assert tallies["any"].share(1) == 1.0
+        assert tallies["partial"].share(1) == 1.0
         assert tallies["half"].share(0) == 1.0
         assert tallies["whole"].share(0) == 1.0
 
@@ -125,7 +125,7 @@ class TestResolution:
         big = write_clip(tmp_path / "big", [{"right": hand(u=300.0), "left": hand(n=0)}], (640, 480))
         small = write_clip(tmp_path / "small", [{"right": hand(u=300.0), "left": hand(n=0)}], (160, 120))
         assert measure(big.parent)[0]["whole"].share(1) == 1.0
-        assert measure(small.parent)[0]["any"].share(0) == 1.0
+        assert measure(small.parent)[0]["partial"].share(0) == 1.0
 
     def test_falls_back_when_the_csv_was_moved_from_its_clip(self, tmp_path):
         loose = tmp_path / "cam_head0"
@@ -144,7 +144,7 @@ class TestMeasure:
             root = tmp_path / f"d{i}"
             write_clip(root, [{"right": hand(), "left": hand()} for _ in range(2)])
         tallies, per_clip = measure(tmp_path)
-        assert tallies["any"].total == 6
+        assert tallies["partial"].total == 6
         assert len(per_clip) == 3
 
     def test_report_names_the_emptiest_clips(self, tmp_path):
