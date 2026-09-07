@@ -590,17 +590,27 @@ background, body, camera — and only the motion varies *within* one.
 ```bash
 # 1. Plan. Writes one directory per clip. No rendering, takes seconds.
 uv run phanesim plan-clips --template data/sequences/model1/sequence.json \
-    --output dataset --clips 60
+    --output dataset_test --clips 10 --frames 15 --hand 6
+
+# or on cluster
+
+uv run phanesim plan-clips \
+    --template data/sequences/model1/sequence.json \
+    --output ~/storage/user/phanesim/dataset \
+    --clips 50 \
+    --frames 15 \
+    --hand 6 \
+    --append
 
 # ...then the other body, numbering on from where the first left off.
 uv run phanesim plan-clips --template data/sequences/model2/sequence.json \
-    --output dataset --clips 40 --append
+    --output dataset --clips 10 --append
 
 # 2. Render. Interrupt it whenever; run it again to carry on.
 uv run phanesim render-clips dataset
 
-# 3. Check if hands are visible in the datset
-uv ruyn phanesim visibility dataset
+# 3. Check if hands are visible in the dataset
+uv run phanesim visibility dataset
 ```
 
 Planning each body separately is how you control the mix. Passing two

@@ -122,7 +122,15 @@ def _shortest_path(target: Path, start: Path) -> str:
     Relative keeps a dataset movable as a whole, but one sitting on another
     filesystem produces a wall of "../" that nobody can read.  Falling back to
     absolute there keeps the file legible; both forms load the same.
+
+    Both ends are resolved first.  The "../" are counted off the path as it is
+    written here, while render-clips resolves the dataset directory before
+    joining them back on, so a symlink above the clips -- ~/storage/user
+    pointing into an NFS mount, say -- would otherwise be counted from one
+    depth and followed from another, landing the model on a path that does not
+    exist.
     """
+    target, start = target.resolve(), start.resolve()
     relative = os.path.relpath(target, start)
     return relative if len(relative) <= len(str(target)) else str(target)
 
@@ -178,14 +186,39 @@ def _sys_path_setup() -> str:
     return f"import sys; sys.path.insert(0, {_PKG_PARENT!r}); "
 
 
+# Environment variable that turns the software rasteriser off, for machines that
+# have a GPU Blender can actually reach.
+SOFTWARE_GL_VAR = "PHANESIM_SOFTWARE_GL"
+
+
+def _render_env(environ: dict[str, str] | None = None) -> dict[str, str]:
+    """The environment headless Blender is run with.
+
+    EEVEE needs a GL context.  On WSL2 there is no display to make a GPU one, so
+    LIBGL_ALWAYS_SOFTWARE=1 falls back to Mesa's LLVMpipe, which gives a valid
+    surfaceless EGL context on the CPU.  That is the default because it works
+    everywhere.
+
+    On a cluster node with a GPU and working EGL it is the wrong default -- it
+    leaves the GPU idle and renders on the CPU regardless of what the job asked
+    for -- so PHANESIM_SOFTWARE_GL=0 turns it off.  Check that the GPU was really
+    picked up rather than assuming: `blender --background --factory-startup
+    --python-expr "import gpu; print(gpu.platform.renderer_get())"` names
+    llvmpipe when it was not.
+    """
+    environ = dict(os.environ if environ is None else environ)
+    software = environ.get(SOFTWARE_GL_VAR, "1").strip().lower() not in ("0", "false", "no", "")
+    if software:
+        environ["LIBGL_ALWAYS_SOFTWARE"] = "1"
+    else:
+        environ.pop("LIBGL_ALWAYS_SOFTWARE", None)
+    return environ
+
+
 def _run_blender(expr: str, blender_bin: str | None) -> int:
     """Run *expr* in headless Blender and return its exit code."""
     blender = _find_blender(blender_bin)
-    # LIBGL_ALWAYS_SOFTWARE=1: EEVEE Next requires a display for GPU Vulkan context
-    # creation; no display is available in WSL2 headless mode. LLVMpipe (Mesa CPU
-    # renderer) provides a valid EGL surfaceless context without a display.
-    env = {**os.environ, "LIBGL_ALWAYS_SOFTWARE": "1"}
-    result = subprocess.run([blender, "--background", "--factory-startup", "--python-expr", expr], env=env)
+    result = subprocess.run([blender, "--background", "--factory-startup", "--python-expr", expr], env=_render_env())
     return result.returncode
 
 
