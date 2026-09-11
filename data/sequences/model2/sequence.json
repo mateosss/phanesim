@@ -42,13 +42,13 @@
       "anchor_bone": "ORG-spine.006",
       "rest_position": [
         0.0,
-        -0.19,
-        1.564
+        -0.161,
+        1.572
       ],
       "rest_forward": [
         0.0,
         -1.0,
-        -0.268
+        -0.601
       ]
     }
   },
@@ -56,5 +56,8 @@
     "animation01.json"
   ],
   "frames": 31,
-  "hdri": "../../hdri/brown_photostudio_02_2k.exr"
+  "hdri": "../../hdri/indoor_10_2k.exr",
+  "accessories": [],
+  "hdri_spin_deg": 0.0,
+  "hdri_spin_step_deg": 0.0
 }

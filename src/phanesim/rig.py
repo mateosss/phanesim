@@ -55,7 +55,7 @@ def _head_camera_from_dict(data: dict) -> HeadCamera:
         rest_position=_vec("rest_position", None),
         # The body faces -Y in rest pose; the downward component aims at the
         # interaction volume, where the hands are.
-        rest_forward=_vec("rest_forward", [0.0, -1.0, -0.268]),
+        rest_forward=_vec("rest_forward", [0.0, -1.0, -0.601]),
     )
 
 
@@ -107,6 +107,7 @@ class BodySequence:
         "hand_motions": ["<path-to-animation-json>", ...],
         "frames":       <int>,
         "hdri":         "<path>"           -- optional
+        "accessories":  ["watch1", ...]    -- optional, empty means bare hands
       }
     """
 
@@ -115,6 +116,12 @@ class BodySequence:
     hand_motions: list[PoseMotion]
     frames: int  # frames per motion, spread evenly across the timeline
     hdri: Path | None = None
+    # What the body wears for this whole clip.  Absent means bare: the state the
+    # .blend happens to be saved in is never inherited.
+    accessories: tuple[str, ...] = ()
+    # Where the environment map starts, and how far it turns each frame.
+    hdri_spin_deg: float = 0.0
+    hdri_spin_step_deg: float = 0.0
 
     @classmethod
     def from_dict(cls, data: dict, base_dir: Path) -> BodySequence:
@@ -122,6 +129,9 @@ class BodySequence:
             name=str(data["name"]),
             body_rig=BodyRig.from_dict(data["body_rig"], base_dir),
             hand_motions=[PoseMotion.from_path(base_dir / p) for p in data["hand_motions"]],
+            accessories=tuple(data.get("accessories", ())),
+            hdri_spin_deg=float(data.get("hdri_spin_deg", 0.0)),
+            hdri_spin_step_deg=float(data.get("hdri_spin_step_deg", 0.0)),
             frames=int(data["frames"]),
             hdri=(base_dir / data["hdri"]) if data.get("hdri") else None,
         )

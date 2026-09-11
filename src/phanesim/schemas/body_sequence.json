@@ -34,6 +34,27 @@
     "hdri": {
       "type": "string",
       "description": "Path to an HDR/EXR environment map for world lighting. When omitted the model's own lights are used."
+    },
+    "accessories": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "ring1",
+          "ring2",
+          "watch1",
+          "band1"
+        ]
+      },
+      "uniqueItems": true,
+      "description": "Accessories the body wears for this whole clip. Absent or empty means bare hands; nothing is ever inherited from how the .blend was saved."
+    },
+    "hdri_spin_deg": {
+      "type": "number",
+      "description": "Angle the environment map is turned about the vertical axis on the first frame. A yaw, so the horizon stays level at any value."
+    },
+    "hdri_spin_step_deg": {
+      "type": "number",
+      "description": "Degrees added to hdri_spin_deg on each following frame, so every frame gets a different slice of the panorama and a different light direction. 0 holds the background still."
     }
   }
 }

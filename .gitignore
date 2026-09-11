@@ -14,7 +14,15 @@ output*/
 preview*
 data/sequences/minimal
 data/sequences/model1/animation*.json
+data/sequences/model1/sample
 data/sequences/model2/animation*.json
+
+dataset_test*/
+dataset_test/
+dataset/
+
+slurm/
+logs/
 
 .pytest_cache/
 .ruff_cache/
