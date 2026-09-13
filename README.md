@@ -187,6 +187,7 @@ The commands:
 | `render-clips` | Renders a planned dataset. Safe to interrupt and re-run. |
 | `annotate` | Derives `hand_rect.csv` from `joints_2d.csv` files already on disk. Renders nothing. |
 | `visibility` | Reports how many rendered frames actually show a hand. Renders nothing. |
+| `statistics` | Reports detector label counts, bbox sizes and basic annotation QA. Writes nothing. |
 | `validate` | Checks that a JSON file matches its schema. |
 
 The models live in `data/models/model1/` and `data/models/model2/`. Each is a
@@ -711,7 +712,7 @@ dataset from looking finished. Use `--overwrite` to force everything.
 | sensor noise | `noise_std` 0.05–0.40 |
 | vignette | `vignette_factor` 0.30–0.70 |
 | lens distortion | `distortion` 0.25–0.40, with `lens_scale` following it |
-| field of view | `fx` = `fy` 210–270, i.e. about 100°–113° |
+| field of view | `fx` = `fy` 180–270, i.e. about 100°–121° |
 
 Three things are deliberately **not** varied:
 
@@ -744,6 +745,19 @@ from the frame count (30 fps) and does not affect the images.
 Split **by clip, never by frame**. A clip's frames share one background, one body
 and one set of camera settings, so putting some in train and some in test lets a
 network score well on what it has effectively already seen.
+
+### Detector statistics
+
+Submit `slurm/statistics_dataset.sbatch` through Slurm to inspect the full
+dataset. Results are written to `logs/phanesim-statistics-JOBID.out`.
+
+Statistics use `hand_rect.csv` presence flags. Each camera image counts as one
+frame; bbox sizes are measured in original pixels using present boxes only.
+This is separate from the landmark thresholds reported by `visibility`.
+
+The command checks CSV timestamps, frame filenames, row counts and bbox
+validity. It stops on the first error. It does not decode images, check actual
+PNG dimensions, or establish whether a rectangle visually covers a hand.
 
 ### Validate
 

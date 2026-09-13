@@ -5,6 +5,8 @@ __pycache__/
 *.egg-info/
 *.blend1
 
+.vscode/
+AGENTS.md
 
 .venv/
 venv/
@@ -23,6 +25,12 @@ dataset/
 
 slurm/
 logs/
+qa/
+MOO/
+HOT3D/
+mercury/
+
+tools/
 
 .pytest_cache/
 .ruff_cache/
