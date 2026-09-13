@@ -21,6 +21,19 @@ dependencies = [
     "pillow>=12.3.0",
 ]
 
+[project.optional-dependencies]
+train = [
+    "torch>=2.4",
+    "opencv-python-headless>=4.10",
+]
+figures = [
+    "matplotlib>=3.8",  # tools/make_figures.py: the thesis plots
+]
+onnx = [
+    "onnxruntime>=1.17",  # scoring a detector shipped as ONNX, e.g. Mercury's
+    "onnxscript>=0.1",  # only to export the toy graph the tests score
+]
+
 [project.scripts]
 phanesim = "phanesim.cli:main"
 

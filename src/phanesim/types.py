@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import enum
+import math
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -70,6 +71,49 @@ class Body:
 
 
 @dataclass
+class CameraSweep:
+    """A steady turn of the camera away from where the head is looking.
+
+    The head-mounted camera is rigid: it points wherever the skull points and
+    nothing else. That is right for a headset, but it means a sequence whose
+    head never moves sees exactly one view of the room. A sweep turns the camera
+    a little further in one direction as the clip runs, so the first frame is
+    the rest view and the last is *degrees* away from it.
+
+    It is a deliberate, repeatable movement rather than a random one, so a run
+    can be checked by eye: turn it 30 degrees right and the background should
+    slide left across the frames.
+
+    The turn is in the camera's own frame and is added on top of whatever the
+    head is doing, so head poses and a sweep compose rather than conflict.
+    """
+
+    direction: str  # "left", "right", "up" or "down"
+    degrees: float
+
+    #: Rotation applied per direction, as (pitch, yaw) multipliers in the
+    #: camera's own axes: X is its right axis, Y its down axis.
+    _AXES = {"right": (0.0, 1.0), "left": (0.0, -1.0), "up": (1.0, 0.0), "down": (-1.0, 0.0)}
+
+    def __post_init__(self) -> None:
+        if self.direction not in self._AXES:
+            raise ValueError(f"direction must be one of {sorted(self._AXES)}, got {self.direction!r}")
+
+    def euler_at(self, progress: float) -> tuple[float, float, float]:
+        """Rotation in the camera's own frame at *progress* through the clip.
+
+        Args:
+            progress: 0.0 on the first frame, 1.0 on the last.
+
+        Returns:
+            (pitch, yaw, roll) in radians, for a rotation applied in camera axes.
+        """
+        pitch, yaw = self._AXES[self.direction]
+        angle = math.radians(self.degrees) * progress
+        return (pitch * angle, yaw * angle, 0.0)
+
+
+@dataclass
 class HeadCamera:
     """A camera rigidly bolted to the head, as on a real headset.
 
@@ -86,11 +130,25 @@ class HeadCamera:
 
     rest_position must sit outside the head mesh — in front of the nose tip
     rather than inside it.  For model1 the nose reaches y = -0.174 at eye
-    height, so (0, -0.21, 1.715) clears the face.
+    height, and clip_start is 0.01, so a camera behind that line does not clip
+    the face away: it renders the inside of it, filling the frame with skin.
+    (0, -0.181, 1.723) clears the nose by 7 mm, and is about as far back as
+    model1 goes.
+
+    Closer to the face is better as long as it clears, because the hands work
+    close to the body: pulling the camera back from (0, -0.21, 1.715) widens
+    what the near field covers, and those 3 cm alone took a tenth of the frames
+    from holding no hand to holding one.  It is also where a headset's cameras
+    actually sit — the visor, not 10 cm past the nose.
 
     rest_forward points where the camera looks in the rest pose.  Hands sit
-    below eye level, so it is normally tilted down: (0, -1, -0.268) is 15
-    degrees below horizontal, which centres the interaction volume.
+    below eye level and close in, so it is tilted well down: (0, -1, -0.601) is
+    31 degrees below horizontal.  Measured on rendered clips, hand centres sat a
+    median of 26 degrees below a 15-degree axis -- past halfway to the bottom
+    edge -- and steepening it to 31 both centres them (median 14 degrees off the
+    axis afterwards) and took the frames holding two hands from 41% to 69%, and
+    those holding none from 5% to under 1%.  HEAD_VIEW in posemotion.py is
+    calibrated against this angle, so the two have to move together.
     """
 
     anchor_bone: str = "ORG-spine.006"  # the head bone of a Rigify rig

@@ -3,32 +3,23 @@
 
 """Blender EEVEE rendering pipeline for Phanesim sequences.
 
-A BodySequence is rendered by blending named pose assets stored in the model
-.blend according to a pose motion description, with the camera derived from the
-head bone every frame.
+A BodySequence is rendered by blending named pose assets from the model .blend
+according to a pose motion description, with the camera derived from the head
+bone every frame.
 
-Coordinate system assumptions
-------------------------------
-- World frame: right-handed, Z-up (matches Blender's default world).
-- Body joint positions are read from the posed armature in world frame.
-- Camera intrinsics use the OpenCV convention: X right, Y down, Z forward.
-- Blender's camera local frame: X right, Y up, Z backward (looks along -Z).
-  A 180° rotation around X converts OpenCV→Blender camera orientation.
+Conventions: the world frame is right-handed and Z-up, as Blender's default, and
+joint positions are read from the posed armature in it.  Camera intrinsics use
+OpenCV axes (X right, Y down, Z forward) while Blender's camera looks along -Z,
+so a 180° rotation about X converts between them.
 
-Output layout per sequence
----------------------------
-  <output_path>/
-    cam_<name>/
-      frame_000000.png
-      frame_000001.png
-      ...
-      joints_2d.csv   -- columns: timestamp, {hand}_{joint}_u, {hand}_{joint}_v, ...
-
+Each camera writes <output_path>/cam_<name>/ holding frame_000000.png ... and
+joints_2d.csv, whose columns are timestamp then {hand}_{joint}_u/_v per landmark.
+The ground-truth extras -- joints_3d.csv and the detector's hand_rect.csv -- are
+written alongside them when asked for.
 A sequence listing several motions renders each as its own take into
 <output_path>/<motion name>/ instead.
 
-This module must run inside Blender's Python interpreter (provides bpy/mathutils).
-Add the phanesim src/ directory to sys.path before importing from an external script.
+Must run inside Blender's Python interpreter, with phanesim's src/ on sys.path.
 """
 
 from __future__ import annotations
@@ -43,10 +34,21 @@ import mathutils  # pyright: ignore[reportMissingImports]
 import numpy as np
 from scipy.spatial.transform import Rotation
 
+from phanesim.clips import SEQUENCE_FILE, clip_dirs, is_done, mark_done, stray_clip_dirs
+from phanesim.debug import write_hand_rects
 from phanesim.posemotion import NS_PER_SECOND, PoseAsset, PoseMotion
 from phanesim.rig import BodySequence
 from phanesim.skeleton import rigify_hand_landmarks
-from phanesim.types import Camera, CameraModel, HeadCamera, Shutter, Timestamps, Transform, Vector3
+from phanesim.types import (
+    Camera,
+    CameraModel,
+    CameraSweep,
+    HeadCamera,
+    Shutter,
+    Timestamps,
+    Transform,
+    Vector3,
+)
 
 # 180° rotation around X: converts OpenCV camera frame to Blender camera frame.
 _OPENCV_TO_BLENDER_CAM = mathutils.Matrix.Rotation(math.pi, 4, "X")
@@ -95,31 +97,28 @@ def distort_pixel(
 ) -> tuple[float, float]:
     """Map an undistorted pixel to where the compositor puts it.
 
-    Blender's Lens Distortion node is a *gather*: it says which input pixel each
-    output pixel reads from.  Ground truth needs the opposite direction — given a
-    projected landmark in the undistorted render, where does it appear in the
-    written image — so this is the forward map.
+    Blender's Lens Distortion node is a *gather* — it says which input pixel each
+    output pixel reads from — but ground truth needs the opposite: where a
+    landmark in the undistorted render lands in the written image.
 
     The relation was measured against Blender's CPU compositor rather than
-    derived, because the GPU shader in Blender's source implements a different
-    parameterisation than the CPU path that headless renders actually use.
-    Fitting a grid of known points at several distortion values gives, in
+    derived, because the GPU shader in Blender's source uses a different
+    parameterisation from the CPU path headless renders actually take.  In
     coordinates normalised about the image centre::
 
         r_out = r_in * (1 + k) / (1 + k * r_in^2)
 
-    which reproduces Blender's output to ~0.1 px for k up to 0.4, and is exactly
-    the identity at k = 0.  Note the normalisation divides x by width/2 and y by
-    height/2, and is centred on the image centre — not on the intrinsics
-    principal point, which the compositor knows nothing about.
+    reproducing Blender to ~0.1 px for k up to 0.4, and exactly the identity at
+    k = 0.  The normalisation divides x by width/2 and y by height/2 about the
+    image centre, not the intrinsics principal point, which the compositor knows
+    nothing about.
 
     Args:
-        x, y:       Pixel coordinates in the undistorted image.
-        width:      Image width in pixels.
-        height:     Image height in pixels.
-        distortion: The node's Distortion input.
-        scale:      Uniform scale applied by the Transform node after distortion,
-                    used to crop the borders the distortion opens up.
+        x, y:          Pixel coordinates in the undistorted image.
+        width, height: Image size in pixels.
+        distortion:    The node's Distortion input.
+        scale:         Uniform scale the Transform node applies afterwards, to
+                       crop the borders the distortion opens up.
 
     Returns:
         The pixel coordinates in the written image.
@@ -133,11 +132,10 @@ def distort_pixel(
 
     r2 = xn * xn + yn * yn
 
-    # Beyond r = 1/sqrt(k) the map turns over and starts folding outward points
-    # back toward the centre, so a landmark far outside the field of view would
-    # be reported inside the image.  Blender draws the same line: its shader
-    # writes a transparent pixel once distortion * r^2 exceeds 1.  Outside that
-    # radius the point simply has no position in the rendered frame.
+    # Beyond r = 1/sqrt(k) the map folds outward points back toward the centre,
+    # so a landmark far outside the field of view would be reported inside the
+    # image.  Blender draws the same line: its shader writes a transparent pixel
+    # once distortion * r^2 exceeds 1.
     if distortion * r2 > 1.0:
         return float("nan"), float("nan")
 
@@ -154,11 +152,24 @@ def distort_pixel(
 # ---------------------------------------------------------------------------
 
 
-def _setup_world_hdri(scene: bpy.types.Scene, hdri_path: Path) -> None:
+def _setup_world_hdri(
+    scene: bpy.types.Scene,
+    hdri_path: Path,
+    spin_deg: float = 0.0,
+    spin_step_deg: float = 0.0,
+    frames: int = 1,
+) -> None:
     """Set the world background to an HDR/EXR environment map.
 
-    The HDRI provides both the visible background and the scene lighting, so
-    no additional sun lamp is needed when this is used.
+    The HDRI provides both the visible background and the scene lighting, so no
+    additional sun lamp is needed when this is used.
+
+    *spin_deg* turns it about the vertical axis on the first frame and
+    *spin_step_deg* turns it a little further on each one after, so every frame
+    of a clip sees a different slice of the panorama lit from a different
+    direction.  The turn is a yaw: the horizon stays level whatever the angle.
+
+    It moves nothing in the scene, so the joint annotations are untouched.
     """
     world = bpy.data.worlds.new("_phanesim_world")
     world.use_nodes = True
@@ -178,6 +189,22 @@ def _setup_world_hdri(scene: bpy.types.Scene, hdri_path: Path) -> None:
 
     links.new(tex.outputs["Color"], bg.inputs["Color"])
     links.new(bg.outputs["Background"], out.inputs["Surface"])
+
+    if spin_deg or spin_step_deg:
+        coord = nodes.new("ShaderNodeTexCoord")
+        coord.location = (-900, 0)
+        mapping = nodes.new("ShaderNodeMapping")
+        mapping.location = (-600, 0)
+        links.new(coord.outputs["Generated"], mapping.inputs["Vector"])
+        links.new(mapping.outputs["Vector"], tex.inputs["Vector"])
+
+        # A key on every frame, so the value read is exactly the one asked for
+        # and the interpolation between them never comes into it.
+        rotation = mapping.inputs["Rotation"]
+        for frame in range(max(1, frames)):
+            rotation.default_value[2] = math.radians(spin_deg + frame * spin_step_deg)
+            rotation.keyframe_insert("default_value", index=2, frame=frame)
+
     scene.world = world
 
 
@@ -209,18 +236,15 @@ def _load_compositor_effects() -> None:
 def _setup_compositor(scene: bpy.types.Scene, camera: Camera) -> None:
     """Build the compositor pipeline applied to every rendered frame.
 
-    Uses Blender 5.x built-in effect node groups (Chromatic Aberration, Sensor Noise,
-    Vignette) loaded from compositing_nodes_essentials.blend.  These are the same nodes
-    visible in the Compositor Add menu → Camera & Lens Effects / Creative.
+    The effect node groups are Blender 5.x built-ins loaded from
+    compositing_nodes_essentials.blend — the same ones in the Compositor Add menu
+    under Camera & Lens Effects / Creative::
 
-    Pipeline:
       RenderLayers → ChromaticAberration → SensorNoise → BarrelDistortion
       → Transform(1.2×) → Add(BlackMask, Transform) → [RGBtoBW]
       → Vignette → Viewer + GroupOutput
 
-    noise_std / chroma_noise are read directly from camera and sequence and fed to the
-    Sensor Noise node (values in [0-1+] range, no unit conversion).
-    Open preview.blend → Compositor editor to adjust parameters interactively.
+    Open preview.blend in the Compositor editor to adjust parameters by hand.
     """
     # Clean up previously created node group and black mask image.
     if old_ng := bpy.data.node_groups.get("_phanesim_compositor"):
@@ -287,8 +311,8 @@ def _setup_compositor(scene: bpy.types.Scene, camera: Camera) -> None:
     tf_out = tf.outputs["Image"]
 
     # ── 6. Black mask + Add: fill any remaining corner gaps with opaque black ─
-    # ShaderNodeMix(RGBA, ADD) replaces the removed CompositorNodeMixRGB.
-    # A = black image (fills gaps), B = transformed image; result = A + B.
+    # ShaderNodeMix(RGBA, ADD) replaces the removed CompositorNodeMixRGB:
+    # A = black image, B = transformed image, result = A + B.
     black_img = bpy.data.images.new("_phanesim_black", W, H)
     black_img.pixels = [0.0, 0.0, 0.0, 1.0] * (W * H)
     black_node = nodes.new("CompositorNodeImage")
@@ -330,6 +354,21 @@ def _setup_compositor(scene: bpy.types.Scene, camera: Camera) -> None:
     ngo = nodes.new("NodeGroupOutput")
     ngo.location = (1000, 0)
     links.new(cur, ngo.inputs["Image"])
+
+
+def _sensor_roll_deg(rotate: float) -> float:
+    """Roll about the optical axis for a sensor mounted *rotate* degrees over.
+
+    The frame keeps its shape: 640x480 stays 640x480 and the scene inside it lies
+    over.  A quarter turn therefore looks like a 480x640 portrait view filling a
+    landscape file, which is what a sideways-mounted camera writes when the
+    readout is stored as it comes rather than turned upright first.
+
+    Keeping one resolution for the whole dataset is the point -- swapping the
+    frame to 480x640 would give the set two shapes, and swapping the intrinsics
+    with it would put fx and fy at odds with the single lens value Blender takes.
+    """
+    return rotate % 360.0
 
 
 def _configure_render(scene: bpy.types.Scene, camera: Camera, cam_obj: bpy.types.Object) -> None:
@@ -378,10 +417,6 @@ def _configure_render(scene: bpy.types.Scene, camera: Camera, cam_obj: bpy.types
 # Full-body rig: pose assets + head-mounted camera
 # ---------------------------------------------------------------------------
 
-# Pose assets are keyed into the baked timeline no finer than this, so a long
-# multi-frame action does not explode the keyframe count.
-_ACTION_SAMPLE_STEP = 2
-
 
 def _assign_action(arm_obj: bpy.types.Object, action: bpy.types.Action | None) -> None:
     """Assign *action* to the armature, binding its slot as Blender 4.4+ requires.
@@ -401,21 +436,56 @@ def _assign_action(arm_obj: bpy.types.Object, action: bpy.types.Action | None) -
             print(f"[phanesim] slot binding skipped for {action.name!r}: {exc}")
 
 
-def _custom_props(pose_bone: bpy.types.PoseBone) -> dict[str, object]:
-    """Return the bone's custom properties, skipping Blender's UI metadata.
+# Rigify keeps its limb mode switches as custom properties on the parent
+# controls.  They choose *how* a limb is driven -- IK or FK, what the target
+# follows -- not where it is, so they are not part of a pose.  Letting one
+# travel with a pose is worse than useless: a pose captured while the arm was in
+# IK switches the arm to IK when applied, every later FK pose then does nothing,
+# and since nothing switches it back the arm stays frozen for the rest of the
+# clip without any error.
+RIG_MODE_SWITCHES = frozenset({"IK_FK", "IK_Stretch", "IK_parent", "FK_limb_follow", "pole_vector", "pole_parent"})
 
-    Rigify stores its IK/FK and stretch switches as custom properties, so they
-    have to travel with the pose for a captured pose to look right.
+
+def _custom_props(pose_bone: bpy.types.PoseBone) -> dict[str, object]:
+    """Return the bone's custom properties, minus Blender's UI metadata and the
+    rig's mode switches.
+
+    finger_curve and rubber_tweak are kept: they bend the finger and shape the
+    bone, so they describe the pose rather than how the rig is driven.
     """
-    return {k: pose_bone[k] for k in pose_bone.keys() if k != "_RNA_UI"}
+    return {k: pose_bone[k] for k in pose_bone.keys() if k != "_RNA_UI" and k not in RIG_MODE_SWITCHES}
+
+
+def _rig_mode_switches(arm_obj: bpy.types.Object) -> dict[tuple[str, str], object]:
+    """The rig's mode switches, as the .blend was saved with them.
+
+    Capturing a pose means assigning its action and evaluating it, and that
+    evaluation writes these switches onto the rig as a side effect.  Unassigning
+    the action does not put them back, so reading a single pose that was authored
+    in IK leaves the whole armature in IK.  They are saved here so they can be
+    restored once every pose has been read.
+    """
+    return {(pb.name, k): pb[k] for pb in arm_obj.pose.bones for k in pb.keys() if k in RIG_MODE_SWITCHES}
+
+
+def _restore_rig_mode_switches(arm_obj: bpy.types.Object, saved: dict[tuple[str, str], object]) -> None:
+    """Put the switches from _rig_mode_switches back."""
+    for (bone, key), value in saved.items():
+        pb = arm_obj.pose.bones.get(bone)
+        if pb is not None:
+            pb[key] = value
 
 
 def _capture_pose(arm_obj: bpy.types.Object, action: bpy.types.Action, source_frame: int) -> dict[str, dict]:
-    """Evaluate *action* at *source_frame* and snapshot every pose bone.
+    """Evaluate *action* at *source_frame* and snapshot the bones it drives.
 
-    Returns a plain-data snapshot so the source action can be unassigned before
-    the values are written into the baked timeline.
+    Only the action's own bones are captured: snapshotting the whole armature
+    would make every pose overwrite the others, so a right-hand pose would reset
+    the left hand and the head.  Restricting it to the animated bones is what
+    lets poses from different groups layer.  The result is plain data, so the
+    source action can be unassigned before it is written into the baked timeline.
     """
+    driven = _action_bones(action)
     _assign_action(arm_obj, action)
     bpy.context.scene.frame_set(int(source_frame))
     bpy.context.view_layer.update()
@@ -430,11 +500,68 @@ def _capture_pose(arm_obj: bpy.types.Object, action: bpy.types.Action, source_fr
             "props": _custom_props(pb),
         }
         for pb in arm_obj.pose.bones
+        if pb.name in driven
     }
 
 
-def _key_pose(arm_obj: bpy.types.Object, snapshot: dict[str, dict], frame: int) -> None:
-    """Apply *snapshot* to the armature and keyframe it at *frame*.
+def _lerp(a: float, b: float, t: float) -> float:
+    return a + (b - a) * t
+
+
+def _blend_bone(pb: bpy.types.PoseBone, data: dict, alpha: float) -> str:
+    """Move *pb* a fraction *alpha* of the way to the pose in *data*.
+
+    Rotation goes through quaternions whatever the bone's mode, because
+    interpolating euler components takes the long way round once the angles are
+    far apart.  Position, scale and numeric rig sliders are straight lines.
+
+    Returns:
+        The data path the rotation was written to, for the caller to key.
+    """
+    if pb.rotation_mode == "QUATERNION":
+        rot_path, target = "rotation_quaternion", mathutils.Quaternion(data["rot_q"])
+        current = pb.rotation_quaternion.copy()
+    elif pb.rotation_mode == "AXIS_ANGLE":
+        rot_path, target = "rotation_axis_angle", mathutils.Quaternion(data["rot_a"][1:], data["rot_a"][0])
+        current = mathutils.Quaternion(pb.rotation_axis_angle[1:], pb.rotation_axis_angle[0])
+    else:
+        rot_path = "rotation_euler"
+        target = mathutils.Euler(data["rot_e"], pb.rotation_mode).to_quaternion()
+        current = pb.rotation_euler.to_quaternion()
+
+    if alpha >= 1.0:
+        blended = target
+        pb.location = data["loc"]
+        pb.scale = data["scale"]
+    else:
+        blended = current.slerp(target, alpha)
+        pb.location = [_lerp(a, b, alpha) for a, b in zip(pb.location, data["loc"], strict=True)]
+        pb.scale = [_lerp(a, b, alpha) for a, b in zip(pb.scale, data["scale"], strict=True)]
+
+    if rot_path == "rotation_quaternion":
+        pb.rotation_quaternion = blended
+    elif rot_path == "rotation_axis_angle":
+        axis, angle = blended.to_axis_angle()
+        pb.rotation_axis_angle = (angle, *axis)
+    else:
+        pb.rotation_euler = blended.to_euler(pb.rotation_mode)
+
+    for prop, value in data["props"].items():
+        if alpha < 1.0 and isinstance(value, float) and isinstance(pb.get(prop), (int, float)):
+            # finger_curve and friends bend the joint, so they interpolate too.
+            pb[prop] = _lerp(float(pb[prop]), value, alpha)
+        else:
+            pb[prop] = value
+    return rot_path
+
+
+def _key_pose(arm_obj: bpy.types.Object, snapshot: dict[str, dict], frame: int, alpha: float = 1.0) -> None:
+    """Blend *snapshot* into the armature by *alpha* and keyframe it at *frame*.
+
+    Blending from wherever the bones already are, rather than from rest, is what
+    lets a bundle of single-joint poses stack up into one configuration, and what
+    puts the keyframes at interior points of the pose space instead of only on
+    the authored poses themselves.
 
     The caller must have assigned the destination action first.
     """
@@ -443,24 +570,13 @@ def _key_pose(arm_obj: bpy.types.Object, snapshot: dict[str, dict], frame: int) 
         if data is None:
             continue
 
-        pb.location = data["loc"]
-        if pb.rotation_mode == "QUATERNION":
-            pb.rotation_quaternion = data["rot_q"]
-            rot_path = "rotation_quaternion"
-        elif pb.rotation_mode == "AXIS_ANGLE":
-            pb.rotation_axis_angle = data["rot_a"]
-            rot_path = "rotation_axis_angle"
-        else:
-            pb.rotation_euler = data["rot_e"]
-            rot_path = "rotation_euler"
-        pb.scale = data["scale"]
+        rot_path = _blend_bone(pb, data, alpha)
 
         pb.keyframe_insert(data_path="location", frame=frame)
         pb.keyframe_insert(data_path=rot_path, frame=frame)
         pb.keyframe_insert(data_path="scale", frame=frame)
 
-        for prop, value in data["props"].items():
-            pb[prop] = value
+        for prop in data["props"]:
             try:
                 pb.keyframe_insert(data_path=f'["{prop}"]', frame=frame)
             except (RuntimeError, TypeError):
@@ -489,6 +605,32 @@ def _resolve_pose_assets(motion: PoseMotion) -> dict[str, bpy.types.Action]:
     return resolved
 
 
+def _rest_snapshot(arm_obj: bpy.types.Object, bones: set[str]) -> dict[str, dict]:
+    """Snapshot of *bones* at the armature's rest pose.
+
+    Rest is the identity transform in pose space — the T-pose the model was built
+    in — so transforms are written directly rather than read off the rig, which
+    may be sitting in whatever pose the .blend was last saved with.
+
+    Custom properties are read from the live rig instead: they are switches like
+    IK/FK blends, not pose values, so guessing a default would change how the rig
+    behaves rather than where it is.  Call before any pose asset is applied,
+    while those properties still hold their as-saved values.
+    """
+    return {
+        pb.name: {
+            "loc": [0.0, 0.0, 0.0],
+            "rot_q": [1.0, 0.0, 0.0, 0.0],
+            "rot_e": [0.0, 0.0, 0.0],
+            "rot_a": [0.0, 0.0, 1.0, 0.0],
+            "scale": [1.0, 1.0, 1.0],
+            "props": _custom_props(pb),
+        }
+        for pb in arm_obj.pose.bones
+        if pb.name in bones
+    }
+
+
 def _bake_pose_motion(
     arm_obj: bpy.types.Object,
     motion: PoseMotion,
@@ -497,13 +639,15 @@ def _bake_pose_motion(
 ) -> bpy.types.Action:
     """Bake a pose motion description into a single keyframed action.
 
-    Every event contributes one key at its own ``t_ns``; Blender interpolates
-    between consecutive keys, so the armature moves continuously from each pose
-    into the next.  Multi-frame assets are additionally sampled across their
-    playback span.
+    Every event contributes one key at its own ``t_ns`` and Blender's F-curve
+    interpolation supplies the frames between, which is why the render loop only
+    has to call frame_set.
 
-    Blender's own F-curve interpolation then supplies every intermediate frame,
-    which is why the per-frame render loop only has to call frame_set.
+    Every bone the timeline touches is also keyed at rest on frame 0.  An F-curve
+    holds its first keyframe's value for every frame *before* it, so a bone whose
+    first event comes late would otherwise show that pose from the opening frame
+    — a left hand already in a whole-body pose a second before the event that
+    causes it.
 
     Args:
         arm_obj:     The armature to bake onto.
@@ -516,33 +660,40 @@ def _bake_pose_motion(
     """
     assets = _resolve_pose_assets(motion)
 
+    # Read before pass 1 applies any pose asset, so the custom properties in the
+    # snapshot are the rig's own rather than some pose's.
+    driven: set[str] = set()
+    for name in motion.assets():
+        driven |= _action_bones(assets[name])
+    rest = _rest_snapshot(arm_obj, driven)
+
     def to_frame(t_ns: int) -> int:
         return int(round(t_ns * fps / NS_PER_SECOND))
 
-    # Plan every key up front, one list per event: (dest_frame, asset, source_frame).
-    # A multi-frame asset contributes several, a static pose exactly one.
-    event_plans: list[list[tuple[int, str, int]]] = []
-    for event in motion.events:
-        action = assets[event.asset]
-        first = int(event.source_frames[0]) if event.source_frames else int(action.frame_range[0])
-        keys = [(to_frame(event.t_ns), event.asset, first)]
-
-        if event.kind == "action" and event.duration_ns > 0 and event.source_frames:
-            span = max(1, int(event.source_frames[1]) - first)
-            for offset in range(_ACTION_SAMPLE_STEP, span + 1, _ACTION_SAMPLE_STEP):
-                t_ns = event.t_ns + int(offset * event.duration_ns / span)
-                keys.append((to_frame(t_ns), event.asset, first + offset))
-        event_plans.append(keys)
+    # Plan every key up front: one entry per pose in every event's bundle, in
+    # the order they are blended.  Events landing on the same frame are ordered
+    # whole-body first, so a limb pose written at that instant refines the body
+    # pose instead of being overwritten by it -- both hands are pinned to the end
+    # of the clip, which is exactly where a whole-body pose can also fall.
+    ordered = sorted(motion.events, key=lambda e: (e.t_ns, e.group != "body"))
+    plan = [
+        (to_frame(e.t_ns), pick.asset, int(assets[pick.asset].frame_range[0]), pick.alpha)
+        for e in ordered
+        for pick in e.poses
+    ]
 
     # Pass 1 — capture each distinct (asset, source frame) once.  Switching
     # actions is the expensive part, so all reads happen before any writes and
     # repeated poses reuse their snapshot.
+    modes = _rig_mode_switches(arm_obj)
     snapshots: dict[tuple[str, int], dict[str, dict]] = {}
-    for keys in event_plans:
-        for _, asset_name, src_frame in keys:
-            key = (asset_name, src_frame)
-            if key not in snapshots:
-                snapshots[key] = _capture_pose(arm_obj, assets[asset_name], src_frame)
+    for _, asset_name, src_frame, _alpha in plan:
+        key = (asset_name, src_frame)
+        if key not in snapshots:
+            snapshots[key] = _capture_pose(arm_obj, assets[asset_name], src_frame)
+    # Reading the poses moved the switches; put them back before anything is
+    # keyed, so the whole clip renders in the mode the model was saved in.
+    _restore_rig_mode_switches(arm_obj, modes)
 
     # Pass 2 — write the timeline into a fresh action.
     if old := bpy.data.actions.get(action_name):
@@ -550,9 +701,11 @@ def _bake_pose_motion(
     baked = bpy.data.actions.new(name=action_name)
     _assign_action(arm_obj, baked)
 
-    for keys in event_plans:
-        for frame, asset_name, src_frame in keys:
-            _key_pose(arm_obj, snapshots[(asset_name, src_frame)], frame)
+    # Rest first, so that events at frame 0 overwrite it for their own bones and
+    # every other bone still has somewhere to start from.
+    _key_pose(arm_obj, rest, 0)
+    for frame, asset_name, src_frame, alpha in plan:
+        _key_pose(arm_obj, snapshots[(asset_name, src_frame)], frame, alpha)
 
     # Blender defaults to Bezier with auto-clamped handles, which flattens the
     # curve at every key: motion nearly stops on each pose and accelerates in
@@ -566,18 +719,19 @@ def _bake_pose_motion(
                     for keyframe in fcurve.keyframe_points:
                         keyframe.interpolation = "LINEAR"
 
-    total_keys = sum(len(k) for k in event_plans)
-    print(f"[phanesim] Baked {len(motion.events)} pose event(s) into {total_keys} keyframe group(s).")
+    print(
+        f"[phanesim] Baked {len(motion.events)} event(s), {len(plan)} pose(s) in all, "
+        f"over a rest pose of {len(rest)} bone(s) at frame 0."
+    )
     return baked
 
 
 def _load_body_model(model_path: Path, armature_name: str) -> bpy.types.Object:
     """Open the body .blend as the working scene and return its armature.
 
-    The file is opened rather than appended so the model keeps its own
-    materials, lights and — crucially — its pose assets, which live as actions
-    in that file.  This replaces the current scene, so it must run before any
-    render or compositor setup.
+    Opened rather than appended so the model keeps its own materials, lights and
+    — crucially — its pose assets, which live as actions in that file.  This
+    replaces the current scene, so it must run before any render setup.
 
     Raises:
         RuntimeError: If the named armature is not present in the file.
@@ -594,40 +748,117 @@ def _load_body_model(model_path: Path, armature_name: str) -> bpy.types.Object:
     return arm_obj
 
 
+def _action_bones(action: bpy.types.Action) -> set[str]:
+    """Names of the pose bones an action actually animates."""
+    names: set[str] = set()
+    for layer in action.layers:
+        for strip in layer.strips:
+            for channelbag in strip.channelbags:
+                for fcurve in channelbag.fcurves:
+                    if 'pose.bones["' in fcurve.data_path:
+                        names.add(fcurve.data_path.split('"')[1])
+    return names
+
+
+def _asset_group(bones: set[str]) -> str:
+    """Classify an asset by the side of the body it drives.
+
+    Derived from the animated bones rather than the asset name, so a renamed pose
+    keeps working.  Different groups touch disjoint bones and can be applied
+    together; a "body" asset touches both sides at once.
+    """
+    if not bones:
+        return "body"
+    left = {b for b in bones if b.endswith(".L")}
+    right = {b for b in bones if b.endswith(".R")}
+    if left and not right:
+        return "left"
+    if right and not left:
+        return "right"
+    if not left and not right:
+        return "head"
+    return "body"
+
+
+# Finger control bones, by the prefix that identifies which finger they belong to.
+FINGER_PREFIXES = ("thumb", "f_index", "f_middle", "f_ring", "f_pinky")
+
+
+def _asset_part(bones: set[str]) -> str:
+    """Which joint an asset drives, derived from the bones it animates.
+
+    The pose library is a basis rather than a set of samples: one asset moves the
+    upper arm, another the forearm, another a single finger, and an event blends
+    one of each.  That only works if the parts can be told apart, and reading the
+    bones rather than the name or the catalog means a renamed or refiled pose
+    keeps working.
+
+    Checked from the shoulder outwards, so a pose that happens to touch several
+    is named for the largest joint it moves.
+    """
+    if any(b.startswith("upper_arm_fk") for b in bones):
+        return "arm"
+    if any(b.startswith("forearm_fk") for b in bones):
+        return "forearm"
+    if any(b.startswith("hand_fk") for b in bones):
+        return "wrist"
+    fingers = {p for p in FINGER_PREFIXES if any(b.startswith(p) for b in bones)}
+    if len(fingers) == 1:
+        return f"finger:{next(iter(fingers))}"
+    if fingers:
+        # Every finger at once: a whole hand shape, not one joint.
+        return "hand"
+    return "other"
+
+
 def enumerate_pose_assets(model_path: Path, output_json: Path) -> None:
     """Write the pose assets found in *model_path* to *output_json*.
 
-    Runs inside Blender on behalf of the `generate-motion` CLI command, which
-    needs the authoritative asset list before it can sample a timeline.  Only
-    asset-marked actions are reported, so working actions in the file are not
-    mistaken for poses.
+    Runs inside Blender for `generate-motion`, which needs the asset list before
+    it can sample a timeline.  Only single-frame asset-marked actions count:
+    working actions are not poses, and multi-frame ones are not either.
     """
     bpy.ops.wm.open_mainfile(filepath=str(model_path))
-    fps = bpy.context.scene.render.fps or 24
 
-    assets = [
-        PoseAsset(
-            name=action.name,
-            frame_start=int(action.frame_range[0]),
-            frame_end=int(action.frame_range[1]),
-            fps=fps,
-        )
-        for action in bpy.data.actions
-        if action.asset_data is not None
-    ]
+    assets: list[PoseAsset] = []
+    skipped: list[str] = []
+    for action in bpy.data.actions:
+        if action.asset_data is None:
+            continue
+        first, last = int(action.frame_range[0]), int(action.frame_range[1])
+        if last > first:
+            # Only single-frame poses are supported.  Reading frame one of a
+            # multi-frame action and calling it a pose would silently produce a
+            # timeline nobody authored, so it is reported and left out.
+            skipped.append(action.name)
+            continue
+        bones = _action_bones(action)
+        assets.append(PoseAsset(name=action.name, frame=first, group=_asset_group(bones), part=_asset_part(bones)))
     assets.sort(key=lambda a: a.name)
 
+    # Which accessories this model actually carries.  model2 has none, so a plan
+    # that dressed its clips anyway would write a sequence.json claiming a watch
+    # that never appears in the pixels.
+    available = sorted(s for s, root in ACCESSORIES.items() if bpy.data.objects.get(root) is not None)
+
     output_json.parent.mkdir(parents=True, exist_ok=True)
-    output_json.write_text(json.dumps({"model": str(model_path), "assets": [a.to_dict() for a in assets]}, indent=2))
-    print(f"[phanesim] Found {len(assets)} pose asset(s) in {model_path.name}")
+    output_json.write_text(
+        json.dumps(
+            {"model": str(model_path), "assets": [a.to_dict() for a in assets], "accessories": available},
+            indent=2,
+        )
+    )
+    print(f"[phanesim] Found {len(assets)} pose asset(s) and {len(available)} accessory(s) in {model_path.name}")
+    if skipped:
+        print(f"[phanesim] Skipped {len(skipped)} multi-frame action(s), which are not poses: {sorted(skipped)}")
 
 
 def _mute_scene_lights(scene: bpy.types.Scene) -> int:
     """Hide every light object in the scene from rendering.
 
-    An HDRI is a complete lighting environment on its own.  The body model ships
-    with its own key and fill lamps, and leaving them on top of the HDRI stacks
-    two full lighting rigs and blows out the skin to flat white.
+    An HDRI is a complete lighting environment on its own, and the body model
+    ships with its own key and fill lamps; leaving both on stacks two lighting
+    rigs and blows the skin out to flat white.
 
     Returns:
         The number of lights muted.
@@ -656,8 +887,8 @@ def _bone_world_pose(
     """World-space position and orientation of a posed bone, or None if absent.
 
     Fingertips are the tail of their distal bone and have no orientation of their
-    own, so they inherit that bone's rotation — the same convention the 2D
-    landmarks use for position.
+    own, so they inherit that bone's rotation — as the 2D landmarks do for
+    position.
     """
     pb = arm_obj.pose.bones.get(bone_name)
     if pb is None:
@@ -680,13 +911,28 @@ def _head_delta(arm_obj: bpy.types.Object, head_cam: HeadCamera) -> mathutils.Ma
     return arm_obj.matrix_world @ pose_bone.matrix @ bone.matrix_local.inverted() @ arm_obj.matrix_world.inverted()
 
 
-def _head_camera_transform(arm_obj: bpy.types.Object, head_cam: HeadCamera) -> Transform:
+def _head_camera_transform(
+    arm_obj: bpy.types.Object,
+    head_cam: HeadCamera,
+    sweep: CameraSweep | None = None,
+    progress: float = 0.0,
+    roll_deg: float = 0.0,
+) -> Transform:
     """Compute the head-mounted camera pose for the current pose of the rig.
 
-    Position and direction are both rigidly attached to the head: the configured
-    rest-pose values are carried through the head bone's rest-to-pose delta.  The
-    camera never turns to follow the hands, so they enter and leave the frame on
-    their own, exactly as on a real headset.
+    Position and direction are both rigidly attached to the head, carried through
+    the head bone's rest-to-pose delta.  The camera never turns to follow the
+    hands, so they enter and leave the frame on their own, as on a real headset.
+
+    Args:
+        arm_obj:  The posed armature the camera is anchored to.
+        head_cam: Camera placement.
+        sweep:    Optional steady turn away from the head's direction, growing
+                  with *progress* so the clip opens on the rest view.
+        progress: How far through the clip this frame is, 0.0 to 1.0.
+        roll_deg: Constant rotation about the optical axis.  90 puts the sensor
+                  on its side: the frame stays 640x480 but the scene inside it
+                  is portrait, as on a headset with a rotated camera.
 
     Returns:
         T_world_cam in the OpenCV convention (X right, Y down, Z forward).
@@ -711,6 +957,23 @@ def _head_camera_transform(arm_obj: bpy.types.Object, head_cam: HeadCamera) -> T
         up = mathutils.Vector((0.0, 1.0, 0.0))
     right = forward.cross(up).normalized()
     down = forward.cross(right)
+
+    if (sweep is not None and sweep.degrees) or roll_deg:
+        # Columns are the camera axes expressed in world space, so a rotation
+        # right-multiplied here acts in the camera's own frame: X is its right
+        # axis, Y its down axis, Z where it looks.
+        basis = mathutils.Matrix(
+            ((right.x, down.x, forward.x), (right.y, down.y, forward.y), (right.z, down.z, forward.z))
+        )
+        if sweep is not None and sweep.degrees:
+            basis = basis @ mathutils.Euler(sweep.euler_at(progress), "XYZ").to_matrix()
+        if roll_deg:
+            # Z is the optical axis, so this spins the sensor without changing
+            # where the camera looks.
+            basis = basis @ mathutils.Euler((0.0, 0.0, math.radians(roll_deg)), "XYZ").to_matrix()
+        right = mathutils.Vector((basis[0][0], basis[1][0], basis[2][0]))
+        down = mathutils.Vector((basis[0][1], basis[1][1], basis[2][1]))
+        forward = mathutils.Vector((basis[0][2], basis[1][2], basis[2][2]))
 
     rotation = np.array(
         [
@@ -761,9 +1024,9 @@ def _project_landmark(
 ) -> tuple[float, float]:
     """Project a world point to distorted pixel coordinates, or NaN if behind the camera.
 
-    The compositor distorts and rescales the image after rendering, so the same
-    forward map is applied here — otherwise the CSV would describe an
-    undistorted image that was never written to disk.  See distort_pixel.
+    The compositor distorts and rescales after rendering, so the same forward map
+    is applied here; otherwise the CSV would describe an undistorted image that
+    was never written to disk.  See distort_pixel.
     """
     p_cam = T_cam_world.apply(np.array([point_world.x, point_world.y, point_world.z], dtype=np.float64))
     if p_cam[2] <= 0:
@@ -774,41 +1037,109 @@ def _project_landmark(
     return distort_pixel(u, v, width, height, camera.distortion, camera.lens_scale)
 
 
+# Accessories worn by model1, keyed by the short name the CLI accepts.  Each
+# value is the root object; it is parented to a bone, and the mesh it carries
+# hangs below it, so showing or hiding one means walking its children too.
+ACCESSORIES: dict[str, str] = {
+    "ring1": "Ring_R_Root",  # right middle finger
+    "ring2": "Ring_Wedding_L",  # left ring finger
+    "watch1": "Sketchfab_watch",  # left forearm
+    "band1": "Sketchfab_wristband",  # right forearm
+}
+
+
+def _set_accessories(visible: set[str]) -> None:
+    """Show only the accessories in *visible*, hiding every other one.
+
+    Always explicit: there is no "leave the file as it was saved" mode, because
+    model1.blend is saved with all four showing and inheriting that silently put
+    accessories into renders nobody asked for.  An empty set means bare hands.
+
+    An unknown name is an error rather than a silent no-op, so a typo cannot
+    quietly render a bare hand.
+
+    Args:
+        visible: Short names from ACCESSORIES; empty for none.
+
+    Raises:
+        ValueError: If a name is not a known accessory.
+    """
+    unknown = visible - ACCESSORIES.keys()
+    if unknown:
+        raise ValueError(f"unknown accessory {sorted(unknown)}; known: {sorted(ACCESSORIES)}")
+
+    shown, missing = [], []
+    for short, root_name in ACCESSORIES.items():
+        root = bpy.data.objects.get(root_name)
+        if root is None:
+            # A model that simply does not have this accessory; only worth
+            # reporting if it was asked for.
+            if short in visible:
+                missing.append(short)
+            continue
+        hide = short not in visible
+        for obj in [root, *root.children_recursive]:
+            obj.hide_render = hide
+            obj.hide_viewport = hide
+        if not hide:
+            shown.append(short)
+
+    print(f"[phanesim] Accessories: {', '.join(shown) if shown else 'none'}.")
+    if missing:
+        print(f"[phanesim] Not in this model, skipped: {', '.join(missing)}.")
+
+
 def render_body_sequence(
     seq: BodySequence,
     output_path: Path,
     frames: int | None = None,
     write_3d: bool = False,
+    write_rects: bool = False,
+    accessories: set[str] | None = None,
+    camera_sweep: CameraSweep | None = None,
+    rotate: float = 0.0,
 ) -> None:
     """Render a BodySequence: pose-asset motion seen by a head-mounted camera.
 
-    Structurally this mirrors render_sequence — bake keyframes and collect
-    projections, then render the whole animation in one call — but the motion
-    comes from pose assets rather than CSVs and the camera pose is derived from
-    the head bone instead of being read from a trajectory.
-
-    When the sequence lists several motions each is rendered as its own take
-    into <output_path>/<motion name>/, so a batch of generated animations can be
-    rendered in one command.
+    Bakes keyframes and collects projections, then renders the whole animation in
+    one call so EEVEE initialises once.  Several motions in one sequence each
+    become their own take under <output_path>/<motion name>/.
 
     Args:
         seq:         Loaded BodySequence.
         output_path: Root output directory for this sequence.
         frames:      Frames to render per motion, overriding seq.frames.
         write_3d:    Also write joints_3d.csv with world-space joint poses.
+        write_rects: Also write hand_rect.csv, the per-hand presence flag and
+                     bounding box a detector is trained against.
+        accessories: Short names to wear, overriding the sequence.  None uses
+                     the sequence's own list, which is empty unless it says
+                     otherwise.
+        camera_sweep: Optional steady turn of the camera across the clip.
+        rotate:       Degrees to rotate the sensor about the optical axis; 90
+                      makes a portrait view inside the same landscape frame.
     """
     for motion in seq.hand_motions:
         take_path = output_path if len(seq.hand_motions) == 1 else output_path / motion.name
-        _render_body_take(seq, motion, take_path, frames if frames is not None else seq.frames, write_3d)
+        _render_body_take(
+            seq,
+            motion,
+            take_path,
+            frames if frames is not None else seq.frames,
+            write_3d,
+            write_rects,
+            accessories,
+            camera_sweep,
+            rotate,
+        )
 
 
 def _sample_timestamps(motion: PoseMotion, frames: int) -> tuple[Timestamps, float]:
     """Choose the timestamps to render, and the sampling rate they imply.
 
-    The frame count is the only control: *frames* samples are spread evenly over
-    the whole timeline, so 2 gives the first and last frame and any count shows
-    the entire motion rather than a truncated opening.  The rate is a
-    consequence, reported rather than configured.
+    The frame count is the only control: samples spread evenly over the whole
+    timeline, so 2 gives the first and last frame and any count covers the entire
+    motion rather than a truncated opening.  The rate is a consequence.
 
     Returns:
         The sample timestamps in nanoseconds, and the effective rate in Hz that
@@ -829,6 +1160,10 @@ def _render_body_take(
     output_path: Path,
     frames: int,
     write_3d: bool = False,
+    write_rects: bool = False,
+    accessories: set[str] | None = None,
+    camera_sweep: CameraSweep | None = None,
+    rotate: float = 0.0,
 ) -> None:
     """Render one pose motion of a BodySequence into *output_path*."""
     rig = seq.body_rig
@@ -837,9 +1172,10 @@ def _render_body_take(
     # Opening the model replaces the scene, so it must happen before any setup.
     arm_obj = _load_body_model(rig.body.model, rig.body.armature)
     scene = bpy.context.scene
+    _set_accessories(set(seq.accessories) if accessories is None else accessories)
 
     if seq.hdri:
-        _setup_world_hdri(scene, seq.hdri)
+        _setup_world_hdri(scene, seq.hdri, seq.hdri_spin_deg, seq.hdri_spin_step_deg, frames)
         muted = _mute_scene_lights(scene)
         print(f"[phanesim] HDRI lighting: muted {muted} light(s) shipped with the model.")
 
@@ -875,7 +1211,8 @@ def _render_body_take(
             scene.frame_set(frame_idx)
             bpy.context.view_layer.update()
 
-            T_world_cam = _head_camera_transform(arm_obj, head_cam)
+            progress = frame_idx / max(1, len(timestamps) - 1)
+            T_world_cam = _head_camera_transform(arm_obj, head_cam, camera_sweep, progress, _sensor_roll_deg(rotate))
             T_cam_world = T_world_cam.inv()
 
             mat = mathutils.Matrix(T_world_cam.as_matrix().tolist()) @ _OPENCV_TO_BLENDER_CAM
@@ -908,6 +1245,16 @@ def _render_body_take(
             writer.writerow(["timestamp"] + joint_columns)
             writer.writerows(joint_rows)
 
+        if write_rects:
+            # Derived from the CSV just written, not from joint_rows, so the
+            # boxes can only ever describe the numbers the dataset ships.  The
+            # resolution is passed in rather than sniffed from the frames:
+            # nothing is rendered yet, and Blender has no Pillow to read a PNG
+            # with anyway.
+            rect_path = write_hand_rects(cam_dir, resolution=camera.resolution)
+            if rect_path is not None:
+                print(f"[phanesim] Wrote {rect_path.name}: per-hand presence and bounding box.")
+
         if write_3d:
             csv_3d_path = cam_dir / "joints_3d.csv"
             with csv_3d_path.open("w", newline="") as csv_file:
@@ -925,7 +1272,52 @@ def _render_body_take(
         bpy.data.cameras.remove(cam_data)
 
 
-def preview_body_sequence(seq: BodySequence, save_path: str | None = None, frames: int | None = None) -> None:
+def render_clips(dataset_dir: Path, overwrite: bool = False) -> None:
+    """Render every clip under *dataset_dir*, skipping the ones already done.
+
+    One Blender process walks the whole list, so the interpreter and its addons
+    start once rather than once per clip.  A clip is marked done only after its
+    frames are written, so killing the process mid-run costs at most the clip in
+    flight: run the command again and it picks up from there.
+
+    That also covers the process dying on its own — if a long run leaks memory
+    and is killed, resuming is the same command.
+
+    Args:
+        dataset_dir: Directory holding clip_NNNNN/ subdirectories.
+        overwrite:   Re-render clips already marked done.
+    """
+    clips = clip_dirs(dataset_dir)
+    for stray in stray_clip_dirs(dataset_dir):
+        print(f"[phanesim] WARNING: {stray.name}/ holds a clip one level too deep and will not be rendered.")
+    if not clips:
+        raise RuntimeError(f"no clips found in {dataset_dir}; run `phanesim plan-clips` first")
+
+    todo = [d for d in clips if overwrite or not is_done(d)]
+    done_already = len(clips) - len(todo)
+    print(f"[phanesim] {len(clips)} clip(s), {done_already} already done, {len(todo)} to render.")
+
+    for i, clip in enumerate(todo, 1):
+        seq = BodySequence.from_path(clip / SEQUENCE_FILE)
+        print(f"[phanesim] ({i}/{len(todo)}) {clip.name}")
+        # Accessories come from the clip's own sequence.json.  joints_3d and
+        # hand_rect cost nothing extra and are ground truth, so a dataset always
+        # gets them; the debug overlays are not written, since keypoints drawn
+        # onto the pixels would be learned as features.
+        render_body_sequence(seq, clip, write_3d=True, write_rects=True)
+        mark_done(clip, seq.frames)
+
+    print(f"[phanesim] Done: {len(todo)} clip(s) rendered, {done_already} skipped.")
+
+
+def preview_body_sequence(
+    seq: BodySequence,
+    save_path: str | None = None,
+    frames: int | None = None,
+    accessories: set[str] | None = None,
+    camera_sweep: CameraSweep | None = None,
+    rotate: float = 0.0,
+) -> None:
     """Bake a BodySequence as keyframes and optionally save it as a .blend file.
 
     Only the first camera and first motion are baked; open the result in
@@ -938,9 +1330,12 @@ def preview_body_sequence(seq: BodySequence, save_path: str | None = None, frame
 
     arm_obj = _load_body_model(rig.body.model, rig.body.armature)
     scene = bpy.context.scene
+    _set_accessories(set(seq.accessories) if accessories is None else accessories)
 
     if seq.hdri:
-        _setup_world_hdri(scene, seq.hdri)
+        _setup_world_hdri(
+            scene, seq.hdri, seq.hdri_spin_deg, seq.hdri_spin_step_deg, frames if frames is not None else seq.frames
+        )
         _mute_scene_lights(scene)
 
     timestamps, effective_hz = _sample_timestamps(motion, frames if frames is not None else seq.frames)
@@ -960,7 +1355,10 @@ def preview_body_sequence(seq: BodySequence, save_path: str | None = None, frame
     for frame_idx in range(len(timestamps)):
         scene.frame_set(frame_idx)
         bpy.context.view_layer.update()
-        mat = mathutils.Matrix(_head_camera_transform(arm_obj, head_cam).as_matrix().tolist()) @ _OPENCV_TO_BLENDER_CAM
+        # progress is passed so the preview sweeps exactly as the render will.
+        progress = frame_idx / max(1, len(timestamps) - 1)
+        T_world_cam = _head_camera_transform(arm_obj, head_cam, camera_sweep, progress, _sensor_roll_deg(rotate))
+        mat = mathutils.Matrix(T_world_cam.as_matrix().tolist()) @ _OPENCV_TO_BLENDER_CAM
         location, rotation, _ = mat.decompose()
         cam_obj.location = location
         cam_obj.rotation_quaternion = rotation

@@ -210,33 +210,64 @@ uv run phanesim generate-motion --model data/models/model1/model1.blend \
 This writes `animation01.json`: a list of *which pose* at *what time*, and nothing else.
 
 ```json
-{"t_ns": 1040000000, "asset": "Right_one.002", "kind": "pose"}
+{"t_ns": 1040000000, "asset": "Right_one.002", "group": "right"}
 ```
 
 The pose data stays in the `.blend`. The description only stores the **name**, so renaming a
 pose in Blender breaks any description that refers to it.
 
-Single-frame poses get `"kind": "pose"`. Multi-frame ones (e.g. `Wave_Animation`) get
-`"kind": "action"` and are played back over their own length.
+⚠ Only **single-frame** poses count. A multi-frame action marked as an asset is reported and
+left out, because reading frame one of it and calling that a pose would put motion in the
+timeline that nobody authored.
 
-### 4.3 Step 2 — render
+### 4.3 Groups: which poses can be held at the same time
+
+The `group` field is worked out from the **bones the pose actually keys**, not from its name:
+
+| Bones keyed | Group | Animated by default |
+|---|---|---|
+| only `*.L` | `left` | yes |
+| only `*.R` | `right` | yes |
+| neither side (spine, head) | `head` | only with `--head` |
+| both `.L` and `.R` | `body` | with `--events`, not with `--hand` |
+
+Poses in different groups touch disjoint bones, so applying one leaves the others where they
+were: a left pose, a right pose and a head pose are all held at once. That multiplies the
+library out — `model1`'s 9 left, 13 right and 9 head poses give 9 x 13 x 9 = 1053
+configurations, not 31.
+
+`--events N` puts N poses in the clip, each drawn from the left, right and whole-body poses
+together. `--hand N` instead gives each hand its own timeline of N poses. `--head` adds the
+head on a timeline of its own; without it the head stays still.
+
+⚠ A pose that keys **both** hands lands in `body`. `Look_At_Hand` and `Pose_photo` are the two
+in `model1`; each keys 215 bones, both hands and the head included. Under `--events` they are
+part of the draw like any other pose, and reposition the whole figure when one comes up. Under
+`--hand` they are skipped, because they belong to no single hand's timeline.
+
+If a hand pose you authored ends up in `body`, you selected too much before saving it: select
+only that hand's bones and re-save (see 3.1). The same trick makes a whole-body pose
+combinable — deselect both hands before saving, and it lands in `head` instead.
+
+### 4.4 Step 2 — render
 ```bash
-uv run phanesim generate body_sequence data/sequences/model1/sequence.json \
+uv run phanesim generate data/sequences/model1/sequence.json \
     --frames 21 --output output_folder --debug_kps
 ```
 `sequence.json` names the model and lists the animation files in `hand_motions`.
 
-### 4.4 What happens to a pose during a render
+### 4.5 What happens to a pose during a render
 1. The description is read; each pose name is looked up in the model's actions.
-2. Each pose is applied once and its bone values are copied out.
+2. Each pose is applied once and **only the bones it keys** are copied out, so poses from
+   different groups do not overwrite one another.
 3. Those values are keyed onto the armature at the times in the description.
 4. Keys are set to **linear**, so the body moves at constant speed between poses.
-5. Hand landmarks are read from the `ORG-` bones and written to `joints_2d.csv`.
+5. Hand landmarks are read from the `DEF-` bones and written to `joints_2d.csv`.
 
 ⚠ If a name in the description is not in the file, the render **stops** with a list of the
 names it did find. It does not silently skip.
 
-### 4.5 Things that bite
+### 4.6 Things that bite
 
 ⚠ **Poses do not transfer between models.** A pose authored on `model1` can be appended into
 `model2`, but the bodies have different proportions, so it usually needs re-posing there.

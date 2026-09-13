@@ -5,10 +5,12 @@
 
 from __future__ import annotations
 
+import math
+
 import pytest
 
 from phanesim.rig import _camera_from_dict
-from phanesim.types import Shutter
+from phanesim.types import CameraSweep, Shutter
 
 _BASE_CAMERA = {
     "intrinsics": {"name": "pinhole", "parameters": {"fx": 240.0, "fy": 240.0, "cx": 320.0, "cy": 240.0}},
@@ -105,3 +107,33 @@ def test_camera_shutter_is_enum(tmp_path):
 # ---------------------------------------------------------------------------
 # Sequence — hdri path resolution
 # ---------------------------------------------------------------------------
+
+
+class TestCameraSweep:
+    """The steady camera turn that --camera asks for."""
+
+    def test_progress_scales_the_angle(self):
+        sweep = CameraSweep("right", 30.0)
+        assert sweep.euler_at(0.0) == (0.0, 0.0, 0.0)
+        assert sweep.euler_at(1.0)[1] == pytest.approx(math.radians(30.0))
+        assert sweep.euler_at(0.5)[1] == pytest.approx(math.radians(15.0))
+
+    def test_left_is_the_negative_of_right(self):
+        assert CameraSweep("left", 30.0).euler_at(1.0)[1] == pytest.approx(-CameraSweep("right", 30.0).euler_at(1.0)[1])
+
+    def test_up_and_down_use_the_pitch_axis(self):
+        # Yaw stays zero for a vertical sweep, and vice versa.
+        assert CameraSweep("up", 20.0).euler_at(1.0)[1] == 0.0
+        assert CameraSweep("up", 20.0).euler_at(1.0)[0] == pytest.approx(math.radians(20.0))
+        assert CameraSweep("down", 20.0).euler_at(1.0)[0] == pytest.approx(-math.radians(20.0))
+
+    def test_roll_is_never_used(self):
+        for direction in ("left", "right", "up", "down"):
+            assert CameraSweep(direction, 45.0).euler_at(1.0)[2] == 0.0
+
+    def test_zero_degrees_is_a_still_camera(self):
+        assert CameraSweep("right", 0.0).euler_at(1.0) == (0.0, 0.0, 0.0)
+
+    def test_unknown_direction_rejected(self):
+        with pytest.raises(ValueError, match="direction must be one of"):
+            CameraSweep("sideways", 10.0)
